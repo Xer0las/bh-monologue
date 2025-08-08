@@ -27,11 +27,9 @@ export default function Page() {
     if (typeof window === 'undefined') return [];
     try { return JSON.parse(localStorage.getItem(FAVS_KEY) || '[]'); } catch { return []; }
   });
-  useEffect(() => {
-    try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {}
-  }, [favs]);
+  useEffect(() => { try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {} }, [favs]);
 
-  // ---- Shareable links: read filters from URL on first load
+  // Read filters from URL on first load
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -47,7 +45,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- Shareable links: write filters to URL when they change
+  // Write filters to URL when they change
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams();
@@ -56,13 +54,10 @@ export default function Page() {
     params.set('length', length);
     params.set('level', level);
     params.set('period', period);
-    const qs = `?${params.toString()}`;
-    const newUrl = window.location.pathname + qs;
-    window.history.replaceState({}, '', newUrl);
+    window.history.replaceState({}, '', `?${params.toString()}`);
   }, [age, genre, length, level, period]);
 
   async function getMonologueClassic() {
-    // keep the old non-streaming path as a fallback (hidden)
     setLoading(true);
     setStreaming(false);
     setData(null);
@@ -89,7 +84,6 @@ export default function Page() {
       const params = new URLSearchParams({ age, genre, length, level, period });
       const res = await fetch(`/api/monologue/stream?${params.toString()}`, { cache: 'no-store' });
       if (!res.ok || !res.body) {
-        // fall back to classic
         await getMonologueClassic();
         setStreaming(false);
         return;
@@ -108,12 +102,10 @@ export default function Page() {
         const chunk = decoder.decode(value, { stream: true });
         carry += chunk;
 
-        // Extract title (first line) once
         if (!haveTitle) {
           const nl = carry.indexOf('\n');
           if (nl !== -1) {
             title = carry.slice(0, nl).replace(/^[#\s-]*/, '').slice(0, 120) || 'Monologue';
-            // remove one optional blank line after title
             let rest = carry.slice(nl + 1);
             if (rest.startsWith('\r\n')) rest = rest.slice(2);
             else if (rest.startsWith('\n')) rest = rest.slice(1);
@@ -130,17 +122,13 @@ export default function Page() {
         }
       }
 
-      // flush any trailing buffer
       if (carry) {
-        if (!haveTitle) {
-          title = carry.trim() || 'Monologue';
-        } else {
-          body += carry;
-        }
+        if (!haveTitle) title = carry.trim() || 'Monologue';
+        else body += carry;
       }
       setData({ ok: true, title: title || 'Monologue', text: body.trim() });
     } catch {
-      await getMonologueClassic(); // fallback
+      await getMonologueClassic();
     } finally {
       setStreaming(false);
     }
@@ -167,9 +155,7 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
-  function printCurrent() {
-    window.print();
-  }
+  function printCurrent() { window.print(); }
 
   function saveFavorite() {
     if (!data || !data.ok || !data.title || !data.text) return;
@@ -196,7 +182,6 @@ export default function Page() {
       <header className="print:hidden">
         <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
         <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
-        <InstallPrompt />
       </header>
 
       {/* Controls */}
@@ -213,7 +198,7 @@ export default function Page() {
             className="h-10 w-full rounded-lg bg-black text-white disabled:opacity-50"
             title="Streams live text"
           >
-            {streaming ? 'Streaming…' : 'Get Monologue (Streaming)'}
+            {streaming ? 'Generating…' : 'Get Monologue'}
           </button>
         </div>
       </div>
@@ -263,6 +248,11 @@ export default function Page() {
           ))}
         </ul>
       </section>
+
+      {/* Install banner moved to bottom */}
+      <footer className="mt-10 print:hidden">
+        <InstallPrompt />
+      </footer>
     </main>
   );
 }
@@ -321,7 +311,7 @@ function InstallPrompt() {
   }
 
   return (
-    <div className="mt-3 rounded-lg border p-3 bg-neutral-50 flex items-center justify-between">
+    <div className="rounded-lg border p-3 bg-neutral-50 flex items-center justify-between">
       <span className="text-sm">Install this app for quick access.</span>
       <div className="flex gap-2">
         <button onClick={doInstall} className="h-9 px-3 rounded border">Install</button>
