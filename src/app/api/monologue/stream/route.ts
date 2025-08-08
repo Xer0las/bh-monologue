@@ -1,5 +1,7 @@
 // src/app/api/monologue/stream/route.ts
 import OpenAI from "openai";
+import { headers } from "next/headers";
+import { take } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 
@@ -22,13 +24,26 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    const [minW, maxW] = lengthToRange(length);
+    // --- Rate limit by IP (streaming is heavier → 6/min)
+    const h = await headers();
+    const ip =
+      h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      h.get("cf-connecting-ip") ||
+      "unknown";
+    const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
+    if (!rl.allowed) {
+      return new Response(`Rate limit exceeded. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`, {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)), "Content-Type": "text/plain" }
+      });
+    }
+    console.log(`[stream] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
 
+    const [minW, maxW] = lengthToRange(length);
     const styleGuide =
       level.startsWith("Beginner")
         ? "Use simpler vocabulary, shorter sentences, clear beats, gentle stakes."
         : "Use richer vocabulary, subtext, sharper turns, and denser imagery—still family-safe for the selected age.";
-
     const periodGuide =
       period.startsWith("Classic")
         ? "Lightly heightened, period-appropriate diction; avoid archaic clutter; keep clarity for youth; do NOT imitate existing authors."
@@ -44,12 +59,11 @@ export async function GET(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    // Create a text decoder stream to the client
+    // Stream plain text back to the client using Chat Completions (text deltas)
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
 
-    // Stream with Chat Completions for easy plain-text deltas
     (async () => {
       try {
         const stream = await openai.chat.completions.create({
