@@ -44,19 +44,37 @@ export async function GET(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    // Stream plain text back to the client
-    const stream = await openai.responses.stream({
-      model: "gpt-4o",
-      instructions:
-        "You are a produced playwright writing ORIGINAL, family-safe, performable monologues for Banzerini House. Output plain text only.",
-      input: prompt,
-      max_output_tokens: 900,
-    });
+    // Create a text decoder stream to the client
+    const encoder = new TextEncoder();
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
 
-    // Cast to any to access runtime helper; SDK typings may lag
-    const readable =
-      (stream as any).toReadableStream?.() ??
-      (stream as any).toStream?.();
+    // Stream with Chat Completions for easy plain-text deltas
+    (async () => {
+      try {
+        const stream = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          stream: true,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a produced playwright writing ORIGINAL, family-safe, performable monologues for Banzerini House. Output plain text only.",
+            },
+            { role: "user", content: prompt },
+          ],
+        });
+
+        for await (const part of stream) {
+          const delta = part.choices?.[0]?.delta?.content || "";
+          if (delta) await writer.write(encoder.encode(delta));
+        }
+      } catch (err: any) {
+        await writer.write(encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`));
+      } finally {
+        await writer.close();
+      }
+    })();
 
     return new Response(readable, {
       headers: {
