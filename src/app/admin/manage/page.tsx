@@ -7,7 +7,7 @@ type Status = {
   storage: 'redis' | 'memory';
   redis: { present: boolean; connected: boolean; error?: string | null };
   env: { url: boolean; token: boolean };
-  couponsCount?: number | null; // optional if diag doesn't include it
+  couponsCount?: number | null;
 };
 
 export default function AdminManagePage() {
@@ -69,6 +69,15 @@ export default function AdminManagePage() {
     console.log('COUPON DEBUG DUMP:', j);
   }
 
+  async function repairCoupons() {
+    setDebugDump(null);
+    const res = await fetch('/api/admin/coupons/repair', { method: 'POST', headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const j = await res.json().catch(()=>null);
+    setDebugDump(j);
+    console.log('COUPON REPAIR RESULT:', j);
+    await refreshAll(stored);
+  }
+
   async function releaseIp(ip: string) {
     await fetch(`/api/admin/overrides?ip=${encodeURIComponent(ip)}`, {
       method: 'DELETE',
@@ -89,8 +98,8 @@ export default function AdminManagePage() {
     const j = await res.json().catch(() => ({}));
     if (res.ok) {
       setForm({ code: '', minutes: 60, uses: 10 });
-      refreshAll(stored);
-      if (j) console.log('CREATE_COUPON_RESPONSE', j);
+      console.log('CREATE_COUPON_RESPONSE', j);
+      await refreshAll(stored);
     } else {
       setErr(j?.error || 'Failed to create coupon');
     }
@@ -131,9 +140,10 @@ export default function AdminManagePage() {
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
           <button onClick={debugCoupons}>Debug: Log coupon keys</button>
+          <button onClick={repairCoupons}>Repair coupon keys</button>
         </div>
         {debugDump && (
-          <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 240, overflow: 'auto', fontSize: 12 }}>
+          <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 300, overflow: 'auto', fontSize: 12 }}>
             {JSON.stringify(debugDump, null, 2)}
           </pre>
         )}
