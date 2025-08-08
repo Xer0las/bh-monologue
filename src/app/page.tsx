@@ -21,23 +21,21 @@ export default function Page() {
 
   const [data, setData] = useState<Monologue | null>(null);
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
 
   const [favs, setFavs] = useState<Fav[]>(() => {
     if (typeof window === 'undefined') return [];
     try { return JSON.parse(localStorage.getItem(FAVS_KEY) || '[]'); } catch { return []; }
   });
-
   useEffect(() => {
-    try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch { /* noop */ }
+    try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {}
   }, [favs]);
 
   // ---- Shareable links: read filters from URL on first load
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-
     const get = (k: string) => params.get(k) || '';
-
     const fromList = <T extends string>(val: string, list: readonly T[], fallback: T): T =>
       (list as readonly string[]).includes(val) ? (val as T) : fallback;
 
@@ -63,8 +61,10 @@ export default function Page() {
     window.history.replaceState({}, '', newUrl);
   }, [age, genre, length, level, period]);
 
-  async function getMonologue() {
+  async function getMonologueClassic() {
+    // keep the old non-streaming path as a fallback (hidden)
     setLoading(true);
+    setStreaming(false);
     setData(null);
     try {
       const res = await fetch('/api/monologue', {
@@ -74,10 +74,75 @@ export default function Page() {
       });
       const json = (await res.json()) as Monologue;
       setData(json);
-    } catch (e) {
+    } catch {
       setData({ ok: false, error: 'Network error' });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function getMonologueStream() {
+    setLoading(false);
+    setStreaming(true);
+    setData({ ok: true, title: '...', text: '' });
+    try {
+      const params = new URLSearchParams({ age, genre, length, level, period });
+      const res = await fetch(`/api/monologue/stream?${params.toString()}`, { cache: 'no-store' });
+      if (!res.ok || !res.body) {
+        // fall back to classic
+        await getMonologueClassic();
+        setStreaming(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let carry = '';
+      let title = '';
+      let body = '';
+      let haveTitle = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        carry += chunk;
+
+        // Extract title (first line) once
+        if (!haveTitle) {
+          const nl = carry.indexOf('\n');
+          if (nl !== -1) {
+            title = carry.slice(0, nl).replace(/^[#\s-]*/, '').slice(0, 120) || 'Monologue';
+            // remove one optional blank line after title
+            let rest = carry.slice(nl + 1);
+            if (rest.startsWith('\r\n')) rest = rest.slice(2);
+            else if (rest.startsWith('\n')) rest = rest.slice(1);
+            body += rest;
+            carry = '';
+            haveTitle = true;
+            setData({ ok: true, title, text: body });
+            continue;
+          }
+        } else {
+          body += carry;
+          carry = '';
+          setData({ ok: true, title: title || 'Monologue', text: body });
+        }
+      }
+
+      // flush any trailing buffer
+      if (carry) {
+        if (!haveTitle) {
+          title = carry.trim() || 'Monologue';
+        } else {
+          body += carry;
+        }
+      }
+      setData({ ok: true, title: title || 'Monologue', text: body.trim() });
+    } catch {
+      await getMonologueClassic(); // fallback
+    } finally {
+      setStreaming(false);
     }
   }
 
@@ -141,13 +206,14 @@ export default function Page() {
         <Select label="Length" value={length} onChange={v=>setLength(v as typeof length)} options={LENGTHS} />
         <Select label="Level" value={level} onChange={v=>setLevel(v as typeof level)} options={LEVELS} />
         <Select label="Time Period" value={period} onChange={v=>setPeriod(v as typeof period)} options={PERIODS} />
-        <div className="flex items-end">
+        <div className="flex items-end gap-2">
           <button
-            onClick={getMonologue}
-            disabled={loading}
+            onClick={getMonologueStream}
+            disabled={streaming}
             className="h-10 w-full rounded-lg bg-black text-white disabled:opacity-50"
+            title="Streams live text"
           >
-            {loading ? 'Generating...' : 'Get Monologue'}
+            {streaming ? 'Streaming…' : 'Get Monologue (Streaming)'}
           </button>
         </div>
       </div>
@@ -168,7 +234,7 @@ export default function Page() {
               <button onClick={copyCurrent} className="h-10 px-3 rounded-lg border">Copy</button>
               <button onClick={downloadTxt} className="h-10 px-3 rounded-lg border">Download .txt</button>
               <button onClick={printCurrent} className="h-10 px-3 rounded-lg border">Print / PDF</button>
-              <button onClick={saveFavorite} className="h-10 px-3 rounded-lg border">Save to Favorites</button>
+              <button onClick={saveFavorite} className="h-10 px-3 rounded-lg border" disabled={streaming}>Save to Favorites</button>
             </div>
           </article>
         )}
