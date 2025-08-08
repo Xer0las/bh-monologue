@@ -1,9 +1,13 @@
 'use client';
-
 import { useEffect, useState } from 'react';
 
 type OverrideRow = { ip: string; remaining: number; expiresInSeconds: number };
 type CouponRow = { code: string; minutes: number; uses: number };
+type Status = {
+  storage: 'redis' | 'memory';
+  redis: { present: boolean; connected: boolean; error?: string | null };
+  env: { url: boolean; token: boolean };
+};
 
 export default function AdminManagePage() {
   const [key, setKey] = useState<string>('');
@@ -12,6 +16,8 @@ export default function AdminManagePage() {
   const [coupons, setCoupons] = useState<CouponRow[]>([]);
   const [form, setForm] = useState<CouponRow>({ code: '', minutes: 60, uses: 10 });
   const [err, setErr] = useState<string>('');
+  const [status, setStatus] = useState<Status | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const k = localStorage.getItem('adminKey') || '';
@@ -28,23 +34,28 @@ export default function AdminManagePage() {
 
   async function refreshAll(k: string) {
     setErr('');
+    setLoading(true);
     try {
-      const [ov, cp] = await Promise.all([
-        fetch('/api/admin/overrides', { headers: { 'x-admin-key': k } }),
-        fetch('/api/admin/coupons', { headers: { 'x-admin-key': k } }),
+      const [st, ov, cp] = await Promise.all([
+        fetch('/api/admin/diag', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/overrides', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/coupons', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
       ]);
-      if (ov.status === 401 || cp.status === 401) {
+      if (st.status === 401 || ov.status === 401 || cp.status === 401) {
         setErr('Unauthorized – check admin key.');
-        setOverrides([]);
-        setCoupons([]);
-        return;
+        setOverrides([]); setCoupons([]); setStatus(null);
+      } else {
+        const stj = await st.json();
+        const ovj = await ov.json();
+        const cpj = await cp.json();
+        setStatus(stj || null);
+        setOverrides(ovj.overrides || []);
+        setCoupons(cpj.coupons || []);
       }
-      const ovj = await ov.json();
-      const cpj = await cp.json();
-      setOverrides(ovj.overrides || []);
-      setCoupons(cpj.coupons || []);
     } catch (e: any) {
       setErr(e?.message || 'Network error');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -52,6 +63,7 @@ export default function AdminManagePage() {
     await fetch(`/api/admin/overrides?ip=${encodeURIComponent(ip)}`, {
       method: 'DELETE',
       headers: { 'x-admin-key': stored },
+      cache: 'no-store',
     });
     refreshAll(stored);
   }
@@ -62,6 +74,7 @@ export default function AdminManagePage() {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-admin-key': stored },
       body: JSON.stringify(form),
+      cache: 'no-store',
     });
     if (res.ok) {
       setForm({ code: '', minutes: 60, uses: 10 });
@@ -87,6 +100,22 @@ export default function AdminManagePage() {
         />
         <button onClick={saveKey} style={{ marginLeft: 8 }}>Use Key</button>
         {err && <p style={{ color: 'crimson' }}>{err}</p>}
+      </section>
+
+      <section style={{ margin: '16px 0', padding: 12, border: '1px solid #ddd' }}>
+        <h2>Status</h2>
+        {!status && <p>—</p>}
+        {status && (
+          <div style={{ fontFamily: 'monospace', fontSize: 14 }}>
+            <div>Storage: <strong>{status.storage}</strong></div>
+            <div>ENV URL: {status.env.url ? 'set' : 'missing'} | ENV TOKEN: {status.env.token ? 'set' : 'missing'}</div>
+            <div>Redis Connected: {status.redis.connected ? 'yes' : (status.redis.present ? 'no' : 'n/a')}</div>
+            {status.redis.error && <div style={{ color: 'crimson' }}>Redis error: {status.redis.error}</div>}
+          </div>
+        )}
+        <button onClick={() => refreshAll(stored)} disabled={loading} style={{ marginTop: 8 }}>
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
       </section>
 
       <section style={{ margin: '16px 0', padding: 12, border: '1px solid #ddd' }}>
