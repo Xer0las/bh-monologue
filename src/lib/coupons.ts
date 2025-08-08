@@ -4,7 +4,7 @@ export type CouponTemplate = { minutes: number; uses: number };
 
 // Redis keys
 const COUPON_PREFIX = 'coupon:';
-const COUPON_INDEX = 'coupon:index'; // still maintained, but listing uses KEYS for robustness
+const COUPON_INDEX = 'coupon:index'; // optional index we still maintain
 
 // In-memory fallback when Redis isn't configured
 const memCoupons = new Map<string, CouponTemplate>();
@@ -24,7 +24,7 @@ async function seedDefaultFromEnv() {
       const exists = await client.exists(COUPON_PREFIX + key);
       if (!exists) {
         await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
-        await client.sadd(COUPON_INDEX, key); // optional index
+        await client.sadd(COUPON_INDEX, key);
       }
     } catch {
       // ignore seed errors
@@ -35,7 +35,7 @@ async function seedDefaultFromEnv() {
 }
 seedDefaultFromEnv().catch(() => {});
 
-// Unified async API
+// --- Public API ---
 
 export async function getCouponTemplate(code: string): Promise<CouponTemplate | null> {
   const key = code.toLowerCase();
@@ -64,9 +64,8 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
   const client = redis;
 
   if (client) {
-    // Get all coupon:* keys, ignore the index set
-    const keys = (await client.keys(`${COUPON_PREFIX}*`)) as unknown as string[];
-    const dataKeys = (keys || []).filter((k) => k.startsWith(COUPON_PREFIX) && k !== COUPON_INDEX);
+    const keys = (await client.keys(`${COUPON_PREFIX}*`)) as unknown as string[]; // e.g., ["coupon:test100"]
+    const dataKeys = (keys || []).filter((k) => k !== COUPON_INDEX);
     if (!dataKeys.length) return [];
 
     const raws = await Promise.all(
@@ -89,4 +88,23 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
   }
 
   return Array.from(memCoupons.entries()).map(([code, v]) => ({ code, ...v }));
+}
+
+// Debug helpers used by /api/admin/coupons/debug
+export async function debugListKeys(): Promise<{ keys: string[]; items: Record<string, CouponTemplate> }> {
+  const client = redis;
+  if (!client) {
+    return { keys: Array.from(memCoupons.keys()), items: Object.fromEntries(memCoupons) };
+  }
+  const keys = (await client.keys(`${COUPON_PREFIX}*`)) as unknown as string[];
+  const items: Record<string, CouponTemplate> = {};
+  if (keys?.length) {
+    const vals = await Promise.all(keys.map((k) => client.get(k) as Promise<string | null>));
+    keys.forEach((k, i) => {
+      const raw = vals[i];
+      if (!raw) return;
+      try { items[k] = JSON.parse(String(raw)) as CouponTemplate; } catch {}
+    });
+  }
+  return { keys: keys || [], items };
 }
