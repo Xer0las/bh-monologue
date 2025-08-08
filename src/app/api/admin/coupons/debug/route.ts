@@ -3,6 +3,7 @@ import { assertAdmin } from '@/lib/admin';
 import { debugList } from '@/lib/coupons';
 import { redis } from '@/lib/kv';
 
+// ...imports unchanged...
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
@@ -11,18 +12,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const base = await debugList();
-
-    // Augment with RAW previews direct from Redis so we can see exactly what's stored.
     const extra: any = { rawByKey: {}, rawLenByKey: {}, rawByCode: {}, rawLenByCode: {} };
-
     const client = redis;
+
     if (client) {
-      // By key (coupon:<code>)
       for (const k of base.keyPattern || []) {
         if (k === 'coupon:index') continue;
         try {
           const v = await client.get(k);
-          const s = v == null ? null : String(v);
+          const s = v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v));
           extra.rawByKey[k] = s == null ? null : s.slice(0, 200);
           extra.rawLenByKey[k] = s == null ? 0 : s.length;
         } catch {
@@ -30,13 +28,11 @@ export async function GET(req: NextRequest) {
           extra.rawLenByKey[k] = 0;
         }
       }
-
-      // By code (indexCodes -> coupon:<code>)
       for (const c of base.indexCodes || []) {
         const k = `coupon:${c}`;
         try {
           const v = await client.get(k);
-          const s = v == null ? null : String(v);
+          const s = v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v));
           extra.rawByCode[c] = s == null ? null : s.slice(0, 200);
           extra.rawLenByCode[c] = s == null ? 0 : s.length;
         } catch {
@@ -51,3 +47,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: e?.message || 'debug error' }, { status: 500 });
   }
 }
+
