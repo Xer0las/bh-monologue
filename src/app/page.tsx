@@ -290,40 +290,7 @@ export default function Page() {
             </a>
           </div>
         </div>
-      )}
-
-      {/* Coupon box */}
-      <section className="mt-4 print:hidden">
-        <div className="rounded-lg border p-3 bg-neutral-50">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-sm">
-              {unlocked ? (
-                <span className="text-green-700">Access unlocked on this connection.</span>
-              ) : (
-                <span>Have a code?</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {!unlocked && (
-                <button onClick={() => setCouponOpen(v => !v)} className="h-9 px-3 rounded border">
-                  {couponOpen ? 'Hide' : 'Enter code'}
-                </button>
-              )}
-            </div>
-          </div>
-          {!unlocked && couponOpen && (
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                value={couponCode}
-                onChange={(e)=>setCouponCode(e.target.value)}
-                placeholder="Enter coupon code"
-                className="h-9 px-3 rounded border w-full"
-              />
-              <button onClick={applyCoupon} className="h-9 px-3 rounded border bg-black text-white">Apply</button>
-            </div>
-          )}
-        </div>
-      </section>
+      )}    
 
       {/* Controls (hidden on print) */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
@@ -425,6 +392,39 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+    {/* Coupon box */}
+          <section className="mt-4 print:hidden">
+            <div className="rounded-lg border p-3 bg-neutral-50">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm">
+                  {unlocked ? (
+                    <span className="text-green-700">Access unlocked on this connection.</span>
+                  ) : (
+                    <span>Have a code?</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {!unlocked && (
+                    <button onClick={() => setCouponOpen(v => !v)} className="h-9 px-3 rounded border">
+                      {couponOpen ? 'Hide' : 'Enter code'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {!unlocked && couponOpen && (
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    value={couponCode}
+                    onChange={(e)=>setCouponCode(e.target.value)}
+                    placeholder="Enter coupon code"
+                    className="h-9 px-3 rounded border w-full"
+                  />
+                  <button onClick={applyCoupon} className="h-9 px-3 rounded border bg-black text-white">Apply</button>
+                </div>
+              )}
+            </div>
+          </section>
+  
 /** Inline install banner **/
 function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
