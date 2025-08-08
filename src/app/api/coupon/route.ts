@@ -8,11 +8,11 @@ export async function POST(req: NextRequest) {
   const code: string | undefined = body.code;
   if (!code) return NextResponse.json({ error: 'Missing code' }, { status: 400 });
 
-  const tpl = getCouponTemplate(code);
+  const tpl = await getCouponTemplate(code);
   if (!tpl) return NextResponse.json({ ok: false, error: 'Invalid code' }, { status: 404 });
 
   const ip = ipFromHeaders(req.headers);
-  grantIp(ip, tpl.minutes, tpl.uses);
+  await grantIp(ip, tpl.minutes, tpl.uses);
 
   return NextResponse.json({ ok: true, ip, minutes: tpl.minutes, uses: tpl.uses });
 }
