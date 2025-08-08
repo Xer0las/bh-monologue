@@ -47,20 +47,18 @@ export async function POST(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // --- Daily quota (shared across streaming + non-streaming): 10 per 24h
-    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 10 });
+    // --- Burst quota: 10 per 5 minutes (shared across streaming + non-streaming)
+    const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
     if (!dq.allowed) {
+      const msg =
+        "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
       return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "We’re thrilled you’re enjoying this! You’ve reached today’s free limit (10). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate",
-        },
+        { ok: false, error: msg },
         { status: 429, headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)) } }
       );
     }
 
-    // --- Per-minute guardrail for this endpoint: 8/min
+    // --- Per-minute guardrail: 8/min for this endpoint
     const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
     if (!rl.allowed) {
       return NextResponse.json(
