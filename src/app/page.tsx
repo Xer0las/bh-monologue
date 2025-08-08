@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 
 const AGE_GROUPS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
-const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)]' as const;
+const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
 const LENGTHS = ['Short (<45s)','Medium (45–60s)','Long (60–90s)','XL (90–120s)'] as const;
 const LEVELS = ['Beginner','Advanced'] as const;
 const PERIODS = ['Contemporary','Classic / Historical'] as const;
@@ -66,7 +66,7 @@ export default function Page() {
 
     track('pageview', { path: window.location.pathname, qs: window.location.search });
 
-    // optional status check (GET /api/coupon status endpoint is optional; ignore errors)
+    // optional status check (GET /api/coupon may 404 if not implemented; ignore errors)
     fetch('/api/coupon', { cache: 'no-store' })
       .then(r => r.json())
       .then(j => setCouponStatus({
