@@ -18,15 +18,15 @@ export async function GET(req: NextRequest) {
     couponsCount: null as number | null,
   };
 
-  if (redis) {
+  const client = redis;
+  if (client) {
     try {
-      // lightweight network check
-      await redis.get('diag:ping');
+      await client.get('diag:ping'); // lightweight check
       status.redis.connected = true;
 
-      // Explicit cast instead of generics to appease TS
-      const codes = (await redis.smembers('coupon:index')) as unknown as string[];
-      status.couponsCount = Array.isArray(codes) ? codes.length : 0;
+      const keys = (await client.keys('coupon:*')) as unknown as string[];
+      const dataKeys = (keys || []).filter((k) => k !== 'coupon:index');
+      status.couponsCount = dataKeys.length;
     } catch (e: any) {
       status.redis.error = e?.message || 'redis error';
     }
