@@ -21,11 +21,10 @@ async function seedDefaultFromEnv() {
 
   if (client) {
     try {
-      const exists = await client.exists(COUPON_PREFIX + key);
-      if (!exists) {
-        await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
-        try { await client.sadd(COUPON_INDEX, key); } catch { /* ignore WRONGTYPE on old index */ }
-      }
+      // Overwrite any wrong-type leftovers
+      try { await client.del(COUPON_PREFIX + key); } catch {}
+      await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
+      try { await client.sadd(COUPON_INDEX, key); } catch {}
     } catch {
       /* ignore seed errors */
     }
@@ -57,9 +56,10 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
   const client = redis;
 
   if (client) {
+    // Delete first so SET always succeeds even if previous type was wrong
+    try { await client.del(COUPON_PREFIX + key); } catch {}
     await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
-    // Best effort: keep index updated, but don't let WRONGTYPE kill the request
-    try { await client.sadd(COUPON_INDEX, key); } catch { /* ignore */ }
+    try { await client.sadd(COUPON_INDEX, key); } catch {}
   } else {
     memCoupons.set(key, { minutes, uses });
   }
@@ -109,7 +109,6 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
       });
       return out;
     } catch {
-      // On any Redis hiccup, return empty (UI will show none)
       return [];
     }
   }
@@ -123,15 +122,18 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
 export async function debugList(): Promise<{
   indexCodes: string[];
   keyPattern: string[];
+  typesByKey: Record<string, string>;
   itemsByCode: Record<string, CouponTemplate | null>;
   itemsByKey: Record<string, CouponTemplate | null>;
 }> {
   const client = redis;
 
   if (!client) {
+    const keys = Array.from(memCoupons.keys()).map((c) => COUPON_PREFIX + c);
     return {
       indexCodes: Array.from(memCoupons.keys()),
-      keyPattern: Array.from(memCoupons.keys()).map((c) => COUPON_PREFIX + c),
+      keyPattern: keys,
+      typesByKey: Object.fromEntries(keys.map((k) => [k, 'string'])),
       itemsByCode: Object.fromEntries(Array.from(memCoupons.entries())),
       itemsByKey: Object.fromEntries(
         Array.from(memCoupons.entries()).map(([c, v]) => [COUPON_PREFIX + c, v])
@@ -142,6 +144,7 @@ export async function debugList(): Promise<{
   const out = {
     indexCodes: [] as string[],
     keyPattern: [] as string[],
+    typesByKey: {} as Record<string, string>,
     itemsByCode: {} as Record<string, CouponTemplate | null>,
     itemsByKey: {} as Record<string, CouponTemplate | null>,
   };
@@ -162,6 +165,18 @@ export async function debugList(): Promise<{
     out.keyPattern = [];
   }
 
+  // Types + values by key (safe; skip the index key which may be a set)
+  for (const k of out.keyPattern) {
+    if (k === COUPON_INDEX) continue;
+    try { out.typesByKey[k] = String(await client.type(k)); } catch { out.typesByKey[k] = 'unknown'; }
+    try {
+      const raw = await client.get(k);
+      out.itemsByKey[k] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+    } catch {
+      out.itemsByKey[k] = null;
+    }
+  }
+
   // Values by code (safe)
   for (const c of out.indexCodes) {
     try {
@@ -169,17 +184,6 @@ export async function debugList(): Promise<{
       out.itemsByCode[c] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
     } catch {
       out.itemsByCode[c] = null;
-    }
-  }
-
-  // Values by key (safe; skip the index key which may be a set)
-  for (const k of out.keyPattern) {
-    if (k === COUPON_INDEX) continue;
-    try {
-      const raw = await client.get(k);
-      out.itemsByKey[k] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
-    } catch {
-      out.itemsByKey[k] = null;
     }
   }
 
