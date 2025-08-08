@@ -7,6 +7,7 @@ type Status = {
   storage: 'redis' | 'memory';
   redis: { present: boolean; connected: boolean; error?: string | null };
   env: { url: boolean; token: boolean };
+  couponsCount?: number | null; // optional if diag doesn't include it
 };
 
 export default function AdminManagePage() {
@@ -18,6 +19,7 @@ export default function AdminManagePage() {
   const [err, setErr] = useState<string>('');
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(false);
+  const [debugDump, setDebugDump] = useState<any | null>(null);
 
   useEffect(() => {
     const k = localStorage.getItem('adminKey') || '';
@@ -59,6 +61,14 @@ export default function AdminManagePage() {
     }
   }
 
+  async function debugCoupons() {
+    setDebugDump(null);
+    const res = await fetch('/api/admin/coupons/debug', { headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const j = await res.json().catch(()=>null);
+    setDebugDump(j);
+    console.log('COUPON DEBUG DUMP:', j);
+  }
+
   async function releaseIp(ip: string) {
     await fetch(`/api/admin/overrides?ip=${encodeURIComponent(ip)}`, {
       method: 'DELETE',
@@ -76,11 +86,12 @@ export default function AdminManagePage() {
       body: JSON.stringify(form),
       cache: 'no-store',
     });
+    const j = await res.json().catch(() => ({}));
     if (res.ok) {
       setForm({ code: '', minutes: 60, uses: 10 });
       refreshAll(stored);
+      if (j) console.log('CREATE_COUPON_RESPONSE', j);
     } else {
-      const j = await res.json().catch(() => ({}));
       setErr(j?.error || 'Failed to create coupon');
     }
   }
@@ -110,12 +121,22 @@ export default function AdminManagePage() {
             <div>Storage: <strong>{status.storage}</strong></div>
             <div>ENV URL: {status.env.url ? 'set' : 'missing'} | ENV TOKEN: {status.env.token ? 'set' : 'missing'}</div>
             <div>Redis Connected: {status.redis.connected ? 'yes' : (status.redis.present ? 'no' : 'n/a')}</div>
-            {status.redis.error && <div style={{ color: 'crimson' }}>Redis error: {status.redis.error}</div>}
+            {typeof status.couponsCount === 'number' && (
+              <div>Coupon keys: {status.couponsCount}</div>
+            )}
           </div>
         )}
-        <button onClick={() => refreshAll(stored)} disabled={loading} style={{ marginTop: 8 }}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+          <button onClick={() => refreshAll(stored)} disabled={loading}>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button onClick={debugCoupons}>Debug: Log coupon keys</button>
+        </div>
+        {debugDump && (
+          <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 240, overflow: 'auto', fontSize: 12 }}>
+            {JSON.stringify(debugDump, null, 2)}
+          </pre>
+        )}
       </section>
 
       <section style={{ margin: '16px 0', padding: 12, border: '1px solid #ddd' }}>
