@@ -34,28 +34,35 @@ export async function GET(req: Request) {
     const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 10 });
     if (!dq.allowed) {
       return new Response(
-        `You've reached today's free limit (10). Each generation costs us a little to run. Please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate`,
+        "We’re thrilled you’re enjoying this! You’ve reached today’s free limit (10). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate",
         {
           status: 429,
           headers: {
             "Retry-After": String(Math.ceil(dq.resetMs / 1000)),
-            "Content-Type": "text/plain"
-          }
+            "Content-Type": "text/plain",
+          },
         }
       );
     }
 
-
     // --- Per-minute guardrail for streaming: 6/min
     const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
     if (!rl.allowed) {
-      return new Response(`Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`, {
-        status: 429,
-        headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)), "Content-Type": "text/plain" }
-      });
+      return new Response(
+        `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`,
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(Math.ceil(rl.resetMs / 1000)),
+            "Content-Type": "text/plain",
+          },
+        }
+      );
     }
 
-    console.log(`[stream] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
+    console.log(
+      `[stream] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`
+    );
 
     const [minW, maxW] = lengthToRange(length);
     const styleGuide =
@@ -77,7 +84,7 @@ export async function GET(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    // Stream plain text back to the client using Chat Completions (text deltas)
+    // Stream plain text back to the client (text deltas)
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -102,7 +109,9 @@ export async function GET(req: Request) {
           if (delta) await writer.write(encoder.encode(delta));
         }
       } catch (err: any) {
-        await writer.write(encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`));
+        await writer.write(
+          encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`)
+        );
       } finally {
         await writer.close();
       }
