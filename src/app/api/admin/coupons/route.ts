@@ -5,7 +5,7 @@ import { assertAdmin } from '@/lib/admin';
 export async function GET(req: NextRequest) {
   const auth = assertAdmin(req);
   if (auth) return auth;
-  return NextResponse.json({ coupons: listCoupons() });
+  return NextResponse.json({ coupons: await listCoupons() });
 }
 
 export async function POST(req: NextRequest) {
@@ -16,6 +16,6 @@ export async function POST(req: NextRequest) {
   if (!code || !minutes || !uses) {
     return NextResponse.json({ error: 'code, minutes, and uses are required' }, { status: 400 });
   }
-  upsertCoupon(String(code), Number(minutes), Number(uses));
+  await upsertCoupon(String(code), Number(minutes), Number(uses));
   return NextResponse.json({ ok: true });
 }
