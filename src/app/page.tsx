@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 const AGE_GROUPS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
 const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
 const LENGTHS = ['Short (<45s)','Medium (45–60s)','Long (60–90s)','XL (90–120s)'] as const;
-const LEVELS = ['PG (Beginner)','Company (Advanced)'] as const;
+const LEVELS = ['Beginner','Advanced'] as const;
 const PERIODS = ['Contemporary','Classic / Historical'] as const;
 
 type Monologue = { ok: boolean; title?: string; text?: string; error?: string };
@@ -16,7 +16,7 @@ export default function Page() {
   const [age, setAge] = useState<typeof AGE_GROUPS[number]>('Teens 14–17');
   const [genre, setGenre] = useState<typeof GENRES[number]>('Comedy');
   const [length, setLength] = useState<typeof LENGTHS[number]>('Medium (45–60s)');
-  const [level, setLevel] = useState<typeof LEVELS[number]>('PG (Beginner)');
+  const [level, setLevel] = useState<typeof LEVELS[number]>('Beginner');
   const [period, setPeriod] = useState<typeof PERIODS[number]>('Contemporary');
 
   const [data, setData] = useState<Monologue | null>(null);
