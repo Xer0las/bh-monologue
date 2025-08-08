@@ -10,12 +10,14 @@ export async function GET(req: NextRequest) {
 
   let connected = false;
   let error: string | null = null;
+  let couponsCount: number | null = null;
 
   if (redis) {
     try {
-      // lightweight check that also hits the network
-      await redis.get('diag:ping');
+      await redis.get('diag:ping'); // lightweight network check
       connected = true;
+      const codes = await redis.smembers<string>('coupon:index');
+      couponsCount = (codes || []).length;
     } catch (e: any) {
       error = e?.message || 'redis error';
     }
@@ -29,6 +31,7 @@ export async function GET(req: NextRequest) {
         url: !!process.env.UPSTASH_REDIS_REST_URL,
         token: !!process.env.UPSTASH_REDIS_REST_TOKEN,
       },
+      couponsCount,
     },
     { headers: { 'Cache-Control': 'no-store' } }
   );
