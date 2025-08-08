@@ -53,7 +53,12 @@ export async function GET(req: Request) {
       max_output_tokens: 900,
     });
 
-    return new Response(stream.toReadableStream(), {
+    // Cast to any to access runtime helper; SDK typings may lag
+    const readable =
+      (stream as any).toReadableStream?.() ??
+      (stream as any).toStream?.();
+
+    return new Response(readable, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-store",
