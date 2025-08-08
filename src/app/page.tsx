@@ -192,7 +192,7 @@ export default function Page() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6">
-      {/* Header is visible in print now */}
+      {/* Header shown in print and PWA */}
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
@@ -208,7 +208,7 @@ export default function Page() {
         </a>
       </header>
 
-      {/* Controls remain hidden for print */}
+      {/* Controls (hidden on print) */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
         <Select label="Age" value={age} onChange={v=>setAge(v as typeof age)} options={AGE_GROUPS} />
         <Select label="Genre" value={genre} onChange={v=>setGenre(v as typeof genre)} options={GENRES} />
@@ -238,6 +238,14 @@ export default function Page() {
               {genre} · {age} · {length} · {level} · {period}
             </p>
             <pre className="mt-3 whitespace-pre-wrap leading-relaxed">{data.text}</pre>
+
+            {/* Branded attribution — visible on screen AND print */}
+            <p className="mt-6 text-xs text-neutral-600">
+              Created with the <strong>Banzerini House Monologue Generator</strong> —{' '}
+              <a href="https://www.banzerinihouse.org" target="_blank" rel="noopener noreferrer" className="underline">
+                banzerinihouse.org
+              </a>
+            </p>
 
             <div className="mt-4 flex flex-wrap gap-2 print:hidden">
               <button onClick={copyCurrent} className="h-10 px-3 rounded-lg border">Copy</button>
@@ -277,6 +285,11 @@ export default function Page() {
       <footer className="mt-10 print:hidden">
         <InstallPrompt />
       </footer>
+
+      {/* Site footer (light, prints too) */}
+      <div className="mt-8 text-center text-xs text-neutral-500">
+        © {new Date().getFullYear()} Banzerini House • banzerinihouse.org
+      </div>
     </main>
   );
 }
