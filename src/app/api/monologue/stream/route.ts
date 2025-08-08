@@ -30,19 +30,18 @@ export async function GET(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // --- Daily quota shared with non-streaming: 10/day
-    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 10 });
+    // --- Burst quota: 10 per 5 minutes (shared across both endpoints)
+    const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
     if (!dq.allowed) {
-      return new Response(
-        "We’re thrilled you’re enjoying this! You’ve reached today’s free limit (10). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate",
-        {
-          status: 429,
-          headers: {
-            "Retry-After": String(Math.ceil(dq.resetMs / 1000)),
-            "Content-Type": "text/plain",
-          },
-        }
-      );
+      const msg =
+        "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
+      return new Response(msg, {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil(dq.resetMs / 1000)),
+          "Content-Type": "text/plain",
+        },
+      });
     }
 
     // --- Per-minute guardrail for streaming: 6/min
