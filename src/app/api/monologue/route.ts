@@ -41,13 +41,13 @@ export async function POST(req: Request) {
       period = "Contemporary",
     } = await req.json().catch(() => ({}));
 
-    const h = await headers();
+    const h = headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = hasOverride(ip);
+    const override = await hasOverride(ip);
     if (!override) {
       // Burst quota: 10 per 5 minutes, shared across endpoints
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
         );
       }
     } else {
-      consumeOverride(ip); // consume one use if finite
+      await consumeOverride(ip); // consume one use if finite
       console.log(`[override] monologue bypass ip=${ip}`);
     }
 
