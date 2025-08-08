@@ -29,7 +29,6 @@ export default function Page() {
   });
   useEffect(() => { try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {} }, [favs]);
 
-  // tiny metrics helper
   function track(event: string, payload?: Record<string, unknown>) {
     try {
       fetch('/api/metrics', {
@@ -41,7 +40,6 @@ export default function Page() {
     } catch {}
   }
 
-  // read filters from URL on first load
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -59,7 +57,6 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // write filters to URL when they change
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams();
@@ -195,7 +192,8 @@ export default function Page() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6">
-      <header className="print:hidden flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      {/* Header is visible in print now */}
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
           <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
@@ -210,7 +208,7 @@ export default function Page() {
         </a>
       </header>
 
-      {/* Controls */}
+      {/* Controls remain hidden for print */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
         <Select label="Age" value={age} onChange={v=>setAge(v as typeof age)} options={AGE_GROUPS} />
         <Select label="Genre" value={genre} onChange={v=>setGenre(v as typeof genre)} options={GENRES} />
@@ -275,7 +273,7 @@ export default function Page() {
         </ul>
       </section>
 
-      {/* Install banner at bottom */}
+      {/* Install banner stays hidden in print */}
       <footer className="mt-10 print:hidden">
         <InstallPrompt />
       </footer>
