@@ -1,7 +1,7 @@
-// src/app/api/monologue/stream/route.ts
 import OpenAI from "openai";
 import { headers } from "next/headers";
 import { take } from "@/lib/ratelimit";
+import { hasOverride, consumeOverride } from "@/lib/overrides";
 
 export const runtime = "nodejs";
 
@@ -30,33 +30,39 @@ export async function GET(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // --- Burst quota: 10 per 5 minutes (shared across both endpoints)
-    const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
-    if (!dq.allowed) {
-      const msg =
-        "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
-      return new Response(msg, {
-        status: 429,
-        headers: {
-          "Retry-After": String(Math.ceil(dq.resetMs / 1000)),
-          "Content-Type": "text/plain",
-        },
-      });
-    }
-
-    // --- Per-minute guardrail for streaming: 6/min
-    const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
-    if (!rl.allowed) {
-      return new Response(
-        `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`,
-        {
+    const override = hasOverride(ip);
+    if (!override) {
+      // Burst quota: 10 per 5 minutes (shared)
+      const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
+      if (!dq.allowed) {
+        const msg =
+          "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
+        return new Response(msg, {
           status: 429,
           headers: {
-            "Retry-After": String(Math.ceil(rl.resetMs / 1000)),
+            "Retry-After": String(Math.ceil(dq.resetMs / 1000)),
             "Content-Type": "text/plain",
           },
-        }
-      );
+        });
+      }
+
+      // Per-minute guardrail for streaming
+      const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
+      if (!rl.allowed) {
+        return new Response(
+          `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`,
+          {
+            status: 429,
+            headers: {
+              "Retry-After": String(Math.ceil(rl.resetMs / 1000)),
+              "Content-Type": "text/plain",
+            },
+          }
+        );
+      }
+    } else {
+      consumeOverride(ip);
+      console.log(`[override] stream bypass ip=${ip}`);
     }
 
     console.log(
@@ -83,7 +89,7 @@ export async function GET(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    // Stream plain text back to the client (text deltas)
+    // Stream plain text back
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -108,9 +114,7 @@ export async function GET(req: Request) {
           if (delta) await writer.write(encoder.encode(delta));
         }
       } catch (err: any) {
-        await writer.write(
-          encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`)
-        );
+        await writer.write(encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`));
       } finally {
         await writer.close();
       }
