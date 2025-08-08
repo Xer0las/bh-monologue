@@ -9,6 +9,32 @@ const COUPON_INDEX  = 'coupon:index';     // set of <code>
 // In-memory fallback when Redis isn't configured
 const memCoupons = new Map<string, CouponTemplate>();
 
+// ---- helpers ----
+function asTemplate(raw: unknown): CouponTemplate | null {
+  if (raw == null) return null;
+
+  // If Upstash client auto-deserialized JSON, we'll get an object here.
+  if (typeof raw === 'object') {
+    const minutes = Number((raw as any)?.minutes);
+    const uses = Number((raw as any)?.uses);
+    return Number.isFinite(minutes) && Number.isFinite(uses) ? { minutes, uses } : null;
+  }
+
+  // If it returned a string, parse JSON.
+  if (typeof raw === 'string') {
+    try {
+      const obj = JSON.parse(raw);
+      const minutes = Number(obj?.minutes);
+      const uses = Number(obj?.uses);
+      return Number.isFinite(minutes) && Number.isFinite(uses) ? { minutes, uses } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 // Seed default from env once (best-effort; never throws)
 async function seedDefaultFromEnv() {
   const code = process.env.COUPON_CODE;
@@ -23,7 +49,8 @@ async function seedDefaultFromEnv() {
     try {
       // Overwrite any wrong-type leftovers
       try { await client.del(COUPON_PREFIX + key); } catch {}
-      await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
+      // Store as a plain object (client can handle objects)
+      await client.set(COUPON_PREFIX + key, { minutes, uses } as any);
       try { await client.sadd(COUPON_INDEX, key); } catch {}
     } catch {
       /* ignore seed errors */
@@ -43,7 +70,7 @@ export async function getCouponTemplate(code: string): Promise<CouponTemplate | 
   if (client) {
     try {
       const raw = await client.get(COUPON_PREFIX + key);
-      return raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+      return asTemplate(raw);
     } catch {
       return null;
     }
@@ -58,7 +85,8 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
   if (client) {
     // Delete first so SET always succeeds even if previous type was wrong
     try { await client.del(COUPON_PREFIX + key); } catch {}
-    await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
+    // Store as object; works with Upstash client auto (de)serialization
+    await client.set(COUPON_PREFIX + key, { minutes, uses } as any);
     try { await client.sadd(COUPON_INDEX, key); } catch {}
   } else {
     memCoupons.set(key, { minutes, uses });
@@ -91,21 +119,15 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
       // Fetch values in parallel
       const vals = await Promise.all(
         codes.map(async (c) => {
-          try { return await client.get(COUPON_PREFIX + c) as string | null; }
+          try { return await client.get(COUPON_PREFIX + c) as unknown; }
           catch { return null; }
         })
       );
 
       const out: { code: string; minutes: number; uses: number }[] = [];
       codes.forEach((c, i) => {
-        const raw = vals[i];
-        if (!raw) return;
-        try {
-          const tpl = JSON.parse(String(raw)) as CouponTemplate;
-          out.push({ code: c, ...tpl });
-        } catch {
-          /* skip malformed */
-        }
+        const tpl = asTemplate(vals[i]);
+        if (tpl) out.push({ code: c, ...tpl });
       });
       return out;
     } catch {
@@ -165,13 +187,13 @@ export async function debugList(): Promise<{
     out.keyPattern = [];
   }
 
-  // Types + values by key (safe; skip the index key which may be a set)
+  // Types + decoded values by key (skip the index key which may be a set)
   for (const k of out.keyPattern) {
     if (k === COUPON_INDEX) continue;
     try { out.typesByKey[k] = String(await client.type(k)); } catch { out.typesByKey[k] = 'unknown'; }
     try {
       const raw = await client.get(k);
-      out.itemsByKey[k] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+      out.itemsByKey[k] = asTemplate(raw);
     } catch {
       out.itemsByKey[k] = null;
     }
@@ -181,7 +203,7 @@ export async function debugList(): Promise<{
   for (const c of out.indexCodes) {
     try {
       const raw = await client.get(COUPON_PREFIX + c);
-      out.itemsByCode[c] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+      out.itemsByCode[c] = asTemplate(raw);
     } catch {
       out.itemsByCode[c] = null;
     }
