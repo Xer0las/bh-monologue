@@ -24,13 +24,13 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    const h = await headers();
+    const h = headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = hasOverride(ip);
+    const override = await hasOverride(ip);
     if (!override) {
       // Burst quota: 10 per 5 minutes (shared)
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
@@ -61,7 +61,7 @@ export async function GET(req: Request) {
         );
       }
     } else {
-      consumeOverride(ip);
+      await consumeOverride(ip);
       console.log(`[override] stream bypass ip=${ip}`);
     }
 
