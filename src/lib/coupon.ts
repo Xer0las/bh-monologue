@@ -1,6 +1,6 @@
 export type CouponTemplate = { minutes: number; uses: number };
 
-const coupons = new Map<string, CouponTemplate>(); // key: code (lowercased)
+const coupons = new Map<string, CouponTemplate>();
 
 function seedDefaultFromEnv() {
   const code = process.env.COUPON_CODE;
@@ -15,11 +15,9 @@ seedDefaultFromEnv();
 export function getCouponTemplate(code: string) {
   return coupons.get(code.toLowerCase());
 }
-
 export function upsertCoupon(code: string, minutes: number, uses: number) {
   coupons.set(code.toLowerCase(), { minutes, uses });
 }
-
 export function listCoupons() {
   return Array.from(coupons.entries()).map(([code, v]) => ({ code, ...v }));
 }
