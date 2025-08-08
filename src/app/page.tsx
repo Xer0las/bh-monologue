@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 
 const AGE_GROUPS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
-const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
+const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)]' as const;
 const LENGTHS = ['Short (<45s)','Medium (45–60s)','Long (60–90s)','XL (90–120s)'] as const;
 const LEVELS = ['Beginner','Advanced'] as const;
 const PERIODS = ['Contemporary','Classic / Historical'] as const;
@@ -66,9 +66,14 @@ export default function Page() {
 
     track('pageview', { path: window.location.pathname, qs: window.location.search });
 
-    // fetch coupon status
+    // optional status check (GET /api/coupon status endpoint is optional; ignore errors)
     fetch('/api/coupon', { cache: 'no-store' })
-      .then(r => r.json()).then(j => setCouponStatus({ unlocked: !!j?.unlocked, remaining: j?.remaining ?? null, secondsLeft: j?.secondsLeft ?? null }))
+      .then(r => r.json())
+      .then(j => setCouponStatus({
+        unlocked: !!j?.unlocked,
+        remaining: j?.remaining ?? null,
+        secondsLeft: j?.secondsLeft ?? null
+      }))
       .catch(()=>{});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -290,7 +295,7 @@ export default function Page() {
             </a>
           </div>
         </div>
-      )}    
+      )}
 
       {/* Controls (hidden on print) */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
@@ -360,6 +365,45 @@ export default function Page() {
         </ul>
       </section>
 
+      {/* Coupon box — moved BELOW Favorites */}
+      <section className="mt-4 print:hidden">
+        <div className="rounded-lg border p-3 bg-neutral-50">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm">
+              {unlocked ? (
+                <span className="text-green-700">
+                  Access unlocked on this connection
+                  {typeof couponStatus.remaining === 'number' ? ` • ${couponStatus.remaining} remaining` : ''}
+                  {typeof couponStatus.secondsLeft === 'number' ? ` • expires in ~${Math.ceil(couponStatus.secondsLeft/60)}m` : ''}
+                  .
+                </span>
+              ) : (
+                <span>Have a code?</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {!unlocked && (
+                <button onClick={() => setCouponOpen(v => !v)} className="h-9 px-3 rounded border">
+                  {couponOpen ? 'Hide' : 'Enter code'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {!unlocked && couponOpen && (
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                value={couponCode}
+                onChange={(e)=>setCouponCode(e.target.value)}
+                placeholder="Enter coupon code"
+                className="h-9 px-3 rounded border w-full"
+              />
+              <button onClick={applyCoupon} className="h-9 px-3 rounded border bg-black text-white">Apply</button>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Install banner */}
       <footer className="mt-10 print:hidden">
         <InstallPrompt />
@@ -392,39 +436,6 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
-    {/* Coupon box */}
-          <section className="mt-4 print:hidden">
-            <div className="rounded-lg border p-3 bg-neutral-50">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm">
-                  {unlocked ? (
-                    <span className="text-green-700">Access unlocked on this connection.</span>
-                  ) : (
-                    <span>Have a code?</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {!unlocked && (
-                    <button onClick={() => setCouponOpen(v => !v)} className="h-9 px-3 rounded border">
-                      {couponOpen ? 'Hide' : 'Enter code'}
-                    </button>
-                  )}
-                </div>
-              </div>
-              {!unlocked && couponOpen && (
-                <div className="mt-3 flex items-center gap-2">
-                  <input
-                    value={couponCode}
-                    onChange={(e)=>setCouponCode(e.target.value)}
-                    placeholder="Enter coupon code"
-                    className="h-9 px-3 rounded border w-full"
-                  />
-                  <button onClick={applyCoupon} className="h-9 px-3 rounded border bg-black text-white">Apply</button>
-                </div>
-              )}
-            </div>
-          </section>
-  
 /** Inline install banner **/
 function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
