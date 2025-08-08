@@ -93,6 +93,20 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
   }
 }
 
+export async function deleteCoupon(code: string): Promise<boolean> {
+  const key = code.toLowerCase();
+  const client = redis;
+
+  if (client) {
+    let ok = true;
+    try { await client.del(COUPON_PREFIX + key); } catch { ok = false; }
+    try { await client.srem(COUPON_INDEX, key); } catch { /* ignore WRONGTYPE */ }
+    return ok;
+  }
+
+  return memCoupons.delete(key);
+}
+
 export async function listCoupons(): Promise<{ code: string; minutes: number; uses: number }[]> {
   const client = redis;
 
