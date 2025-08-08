@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       period = "Contemporary",
     } = await req.json().catch(() => ({}));
 
-    const h = headers();
+    const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
