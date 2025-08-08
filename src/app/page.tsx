@@ -29,7 +29,7 @@ export default function Page() {
   });
   useEffect(() => { try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {} }, [favs]);
 
-  // Fire-and-forget metrics helper
+  // tiny metrics helper
   function track(event: string, payload?: Record<string, unknown>) {
     try {
       fetch('/api/metrics', {
@@ -41,7 +41,7 @@ export default function Page() {
     } catch {}
   }
 
-  // Read filters from URL on first load
+  // read filters from URL on first load
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -55,12 +55,11 @@ export default function Page() {
     setLevel(fromList(get('level'), LEVELS, 'Beginner'));
     setPeriod(fromList(get('period'), PERIODS, 'Contemporary'));
 
-    // Track pageview
     track('pageview', { path: window.location.pathname, qs: window.location.search });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Write filters to URL when they change
+  // write filters to URL when they change
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams();
@@ -92,7 +91,6 @@ export default function Page() {
   }
 
   async function getMonologueStream() {
-    // Track button click with current filters
     track('generate_clicked', { age, genre, length, level, period });
 
     setLoading(false);
@@ -197,9 +195,19 @@ export default function Page() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6">
-      <header className="print:hidden">
-        <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
-        <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
+      <header className="print:hidden flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
+          <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
+        </div>
+        <a
+          href="https://www.banzerinihouse.org/membership"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="h-10 px-4 rounded-lg bg-black text-white flex items-center justify-center"
+        >
+          JOIN OUR PROGRAM!
+        </a>
       </header>
 
       {/* Controls */}
