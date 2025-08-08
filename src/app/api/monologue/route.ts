@@ -1,8 +1,8 @@
-// src/app/api/monologue/route.ts
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import OpenAI from "openai";
 import { take } from "@/lib/ratelimit";
+import { hasOverride, consumeOverride } from "@/lib/overrides";
 
 export const runtime = "nodejs";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -47,24 +47,30 @@ export async function POST(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // --- Burst quota: 10 per 5 minutes (shared across streaming + non-streaming)
-    const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
-    if (!dq.allowed) {
-      const msg =
-        "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
-      return NextResponse.json(
-        { ok: false, error: msg },
-        { status: 429, headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)) } }
-      );
-    }
+    const override = hasOverride(ip);
+    if (!override) {
+      // Burst quota: 10 per 5 minutes, shared across endpoints
+      const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
+      if (!dq.allowed) {
+        const msg =
+          "We’re thrilled you’re enjoying this! You’ve hit the free limit (10 every 5 minutes). Each generation costs us a bit to run—please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate";
+        return NextResponse.json(
+          { ok: false, error: msg },
+          { status: 429, headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)) } }
+        );
+      }
 
-    // --- Per-minute guardrail: 8/min for this endpoint
-    const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
-    if (!rl.allowed) {
-      return NextResponse.json(
-        { ok: false, error: `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.` },
-        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)) } }
-      );
+      // Per-minute guardrail
+      const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
+      if (!rl.allowed) {
+        return NextResponse.json(
+          { ok: false, error: `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.` },
+          { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)) } }
+        );
+      }
+    } else {
+      consumeOverride(ip); // consume one use if finite
+      console.log(`[override] monologue bypass ip=${ip}`);
     }
 
     console.log(
