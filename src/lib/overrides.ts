@@ -1,51 +1,37 @@
-// src/lib/overrides.ts
-export type Override = {
-  expiresAt: number | null;   // null = no expiry
-  remaining: number | null;   // null = unlimited uses
-};
+export type Override = { remaining: number; expiresAt: number };
 
-const store = new Map<string, Override>(); // keyed by IP
+const overrides = new Map<string, Override>(); // key: ip
 
-function cleanup(ip: string) {
-  const v = store.get(ip);
-  if (!v) return;
-  if (v.expiresAt && Date.now() > v.expiresAt) {
-    store.delete(ip);
-  } else if (typeof v.remaining === "number" && v.remaining <= 0) {
-    store.delete(ip);
+export function grantIp(ip: string, minutes: number, uses: number) {
+  const expiresAt = Date.now() + minutes * 60_000;
+  overrides.set(ip, { remaining: uses, expiresAt });
+}
+
+export function getOverride(ip: string): Override | null {
+  const o = overrides.get(ip);
+  if (!o) return null;
+  if (o.expiresAt <= Date.now()) {
+    overrides.delete(ip);
+    return null;
   }
+  return o;
 }
 
-export function grantOverride(ip: string, opts?: { minutes?: number; uses?: number | null }) {
-  const minutes = typeof opts?.minutes === "number" ? opts!.minutes : 0; // 0 = no expiry
-  const uses = typeof opts?.uses === "number" ? opts!.uses : null;        // null = unlimited
-  const expiresAt = minutes > 0 ? Date.now() + minutes * 60_000 : null;
-  store.set(ip, { expiresAt, remaining: uses });
-  return store.get(ip)!;
-}
-
-export function hasOverride(ip: string): boolean {
-  cleanup(ip);
-  return store.has(ip);
-}
-
-export function consumeOverride(ip: string): boolean {
-  cleanup(ip);
-  const v = store.get(ip);
-  if (!v) return false;
-  if (typeof v.remaining === "number") {
-    v.remaining -= 1;
-    if (v.remaining <= 0) store.delete(ip);
-    else store.set(ip, v);
-  }
+// Call this in your rate limit check to spend one use (returns true if allowed)
+export function consume(ip: string): boolean {
+  const o = getOverride(ip);
+  if (!o || o.remaining <= 0) return false;
+  o.remaining -= 1;
   return true;
 }
 
-export function getOverrideStatus(ip: string) {
-  cleanup(ip);
-  const v = store.get(ip);
-  if (!v) return { unlocked: false };
-  const secondsLeft =
-    v.expiresAt ? Math.max(0, Math.floor((v.expiresAt - Date.now()) / 1000)) : null;
-  return { unlocked: true, remaining: v.remaining, secondsLeft };
+export function release(ip: string) {
+  overrides.delete(ip);
+}
+
+export function listOverrides() {
+  const now = Date.now();
+  return Array.from(overrides.entries())
+    .filter(([_, o]) => o.expiresAt > now)
+    .map(([ip, o]) => ({ ip, remaining: o.remaining, expiresInMs: o.expiresAt - now }));
 }
