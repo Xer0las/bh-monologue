@@ -6,7 +6,7 @@ export type CouponTemplate = { minutes: number; uses: number };
 const COUPON_KEY = (code: string) => `coupon:${code.toLowerCase()}`;
 const COUPON_INDEX = 'coupon:index';
 
-// In-memory fallback when Redis env vars aren't set
+// In-memory fallback when Redis isn't configured
 const memCoupons = new Map<string, CouponTemplate>();
 
 // Seed default from env once (best-effort)
@@ -39,8 +39,8 @@ seedDefaultFromEnv().catch(() => {});
 export async function getCouponTemplate(code: string): Promise<CouponTemplate | null> {
   const key = code.toLowerCase();
   if (redis) {
-    const raw = await redis.get<string>(COUPON_KEY(key));
-    return raw ? (JSON.parse(raw) as CouponTemplate) : null;
+    const raw = await redis.get(COUPON_KEY(key));
+    return raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
   }
   return memCoupons.get(key) ?? null;
 }
@@ -57,16 +57,20 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
 
 export async function listCoupons(): Promise<{ code: string; minutes: number; uses: number }[]> {
   if (redis) {
-    const codes = await redis.smembers<string>(COUPON_INDEX);
+    const codes = (await redis.smembers(COUPON_INDEX)) as unknown as string[];
     if (!codes || codes.length === 0) return [];
+
     // Fetch all in parallel
-    const raws = await Promise.all(codes.map((c) => redis.get<string>(COUPON_KEY(c))));
+    const raws = await Promise.all(
+      codes.map((c) => redis.get(COUPON_KEY(c)) as Promise<string | null>)
+    );
+
     const out: { code: string; minutes: number; uses: number }[] = [];
     codes.forEach((c, i) => {
       const raw = raws[i];
       if (!raw) return;
       try {
-        const tpl = JSON.parse(raw) as CouponTemplate;
+        const tpl = JSON.parse(String(raw)) as CouponTemplate;
         out.push({ code: c, ...tpl });
       } catch {
         // ignore bad entries
@@ -74,5 +78,6 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
     });
     return out;
   }
+
   return Array.from(memCoupons.entries()).map(([code, v]) => ({ code, ...v }));
 }
