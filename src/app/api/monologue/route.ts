@@ -1,23 +1,11 @@
-// src/app/api/monologue/route.ts
-import { NextResponse } from "next/server";
-import { headers } from "next/headers";
+// src/app/api/monologue/stream/route.ts
 import OpenAI from "openai";
+import { headers } from "next/headers";
 import { take } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function extractText(resp: any): string {
-  if (resp?.output_text && String(resp.output_text).trim()) {
-    return String(resp.output_text).trim();
-  }
-  const content = resp?.output?.[0]?.content;
-  if (Array.isArray(content)) {
-    const item = content.find((c: any) => typeof c?.text === "string");
-    if (item?.text) return String(item.text).trim();
-  }
-  return "";
-}
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 function lengthToRange(label: string): [number, number] {
   if (label.startsWith("Short")) return [100, 150];
@@ -27,40 +15,50 @@ function lengthToRange(label: string): [number, number] {
   return [160, 220];
 }
 
-export function GET() {
-  return NextResponse.json({ ok: true, route: "monologue", method: "GET" });
-}
-
-export async function POST(req: Request) {
+export async function GET(req: Request) {
   try {
-    const { age = "Teens 14–17", genre = "Comedy", length = "Medium (45–60s)", level = "Beginner", period = "Contemporary" } =
-      await req.json().catch(() => ({}));
+    const url = new URL(req.url);
+    const age = url.searchParams.get("age") || "Teens 14–17";
+    const genre = url.searchParams.get("genre") || "Comedy";
+    const length = url.searchParams.get("length") || "Medium (45–60s)";
+    const level = url.searchParams.get("level") || "Beginner";
+    const period = url.searchParams.get("period") || "Contemporary";
 
-    const [minW, maxW] = lengthToRange(length);
-    const styleGuide =
-      String(level).startsWith("Beginner")
-        ? "Use simpler vocabulary, shorter sentences, clear beats, gentle stakes."
-        : "Use richer vocabulary, subtext, sharper turns, and denser imagery—still family-safe for the selected age.";
-    const periodGuide =
-      String(period).startsWith("Classic")
-        ? "Lightly heightened, period-appropriate diction; avoid archaic clutter; keep clarity for youth; do NOT imitate existing authors."
-        : "Use present-day, natural speech rhythms.";
-
-    // --- Rate limit by IP (8/min for non-streaming)
     const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
-    const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
-    if (!rl.allowed) {
-      return NextResponse.json(
-        { ok: false, error: `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.` },
-        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)) } }
-      );
+
+    // --- Daily quota shared with non-streaming: 50/day
+    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 50 });
+    if (!dq.allowed) {
+      return new Response(`Daily limit reached (50/day). Try again in ${Math.ceil(dq.resetMs / 1000)}s.`, {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)), "Content-Type": "text/plain" }
+      });
     }
 
-    console.log(`[gen] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
+    // --- Per-minute guardrail for streaming: 6/min
+    const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
+    if (!rl.allowed) {
+      return new Response(`Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`, {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)), "Content-Type": "text/plain" }
+      });
+    }
+
+    console.log(`[stream] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
+
+    const [minW, maxW] = lengthToRange(length);
+    const styleGuide =
+      level.startsWith("Beginner")
+        ? "Use simpler vocabulary, shorter sentences, clear beats, gentle stakes."
+        : "Use richer vocabulary, subtext, sharper turns, and denser imagery—still family-safe for the selected age.";
+    const periodGuide =
+      period.startsWith("Classic")
+        ? "Lightly heightened, period-appropriate diction; avoid archaic clutter; keep clarity for youth; do NOT imitate existing authors."
+        : "Use present-day, natural speech rhythms.";
 
     const prompt =
       `Write a brand-new audition monologue for a ${age} actor.\n` +
@@ -72,24 +70,45 @@ export async function POST(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    const resp = await openai.responses.create({
-      model: "gpt-4o",
-      instructions:
-        "You are a produced playwright writing ORIGINAL, family-safe, performable monologues for Banzerini House. Output plain text only.",
-      input: prompt,
-      max_output_tokens: 900
+    // Stream plain text back to the client using Chat Completions (text deltas)
+    const encoder = new TextEncoder();
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+
+    (async () => {
+      try {
+        const stream = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          stream: true,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a produced playwright writing ORIGINAL, family-safe, performable monologues for Banzerini House. Output plain text only.",
+            },
+            { role: "user", content: prompt },
+          ],
+        });
+
+        for await (const part of stream) {
+          const delta = part.choices?.[0]?.delta?.content || "";
+          if (delta) await writer.write(encoder.encode(delta));
+        }
+      } catch (err: any) {
+        await writer.write(encoder.encode(`\n[stream error: ${err?.message || "unknown"}]`));
+      } finally {
+        await writer.close();
+      }
+    })();
+
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
     });
-
-    const text = extractText(resp);
-    if (!text) throw new Error("No text returned from model.");
-
-    const [first, ...rest] = text.split("\n").filter(Boolean);
-    const title = first.replace(/^[-#\s]*/, "").slice(0, 120) || "Monologue";
-    const body = rest.join("\n").trim() || text;
-
-    return NextResponse.json({ ok: true, title, text: body });
   } catch (err: any) {
-    console.error(err);
-    return NextResponse.json({ ok: false, error: err?.message || "Server error" }, { status: 500 });
+    const msg = err?.message || "Server error";
+    return new Response(`Error: ${msg}`, { status: 500 });
   }
 }
