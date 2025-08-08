@@ -7,8 +7,8 @@ export const runtime = 'nodejs';
 export async function GET(req: NextRequest) {
   const auth = assertAdmin(req);
   if (auth) return auth;
-  const body = { coupons: await listCoupons() };
-  return NextResponse.json(body, { headers: { 'Cache-Control': 'no-store' } });
+  const coupons = await listCoupons();
+  return NextResponse.json({ coupons }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function POST(req: NextRequest) {
@@ -19,6 +19,11 @@ export async function POST(req: NextRequest) {
   if (!code || !minutes || !uses) {
     return NextResponse.json({ error: 'code, minutes, and uses are required' }, { status: 400 });
   }
+
   await upsertCoupon(String(code), Number(minutes), Number(uses));
-  return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
+
+  // read-back to confirm it exists
+  const coupons = await listCoupons();
+  const present = coupons.some(c => c.code.toLowerCase() === String(code).toLowerCase());
+  return NextResponse.json({ ok: true, present, count: coupons.length }, { headers: { 'Cache-Control': 'no-store' } });
 }
