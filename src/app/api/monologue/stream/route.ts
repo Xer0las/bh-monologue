@@ -24,19 +24,30 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    // --- Rate limit by IP (streaming is heavier → 6/min)
     const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
+
+    // --- Daily quota shared with non-streaming: 50/day
+    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 50 });
+    if (!dq.allowed) {
+      return new Response(`Daily limit reached (50/day). Try again in ${Math.ceil(dq.resetMs / 1000)}s.`, {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)), "Content-Type": "text/plain" }
+      });
+    }
+
+    // --- Per-minute guardrail for streaming: 6/min
     const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
     if (!rl.allowed) {
-      return new Response(`Rate limit exceeded. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`, {
+      return new Response(`Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.`, {
         status: 429,
         headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)), "Content-Type": "text/plain" }
       });
     }
+
     console.log(`[stream] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
 
     const [minW, maxW] = lengthToRange(length);
