@@ -1,5 +1,5 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 const AGE_GROUPS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
 const GENRES = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
@@ -8,6 +8,9 @@ const LEVELS = ['PG (Beginner)','Company (Advanced)'] as const;
 const PERIODS = ['Contemporary','Classic / Historical'] as const;
 
 type Monologue = { ok: boolean; title?: string; text?: string; error?: string };
+type Fav = { title: string; text: string; meta: string };
+
+const FAVS_KEY = 'bh_monologue_favs_v1';
 
 export default function Page() {
   const [age, setAge] = useState<typeof AGE_GROUPS[number]>('Teens 14–17');
@@ -19,6 +22,15 @@ export default function Page() {
   const [data, setData] = useState<Monologue | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [favs, setFavs] = useState<Fav[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try { return JSON.parse(localStorage.getItem(FAVS_KEY) || '[]'); } catch { return []; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch { /* noop */ }
+  }, [favs]);
+
   async function getMonologue() {
     setLoading(true);
     setData(null);
@@ -28,10 +40,10 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ age, genre, length, level, period }),
       });
-      const json = await res.json();
+      const json = (await res.json()) as Monologue;
       setData(json);
-    } catch (e: any) {
-      setData({ ok: false, error: e?.message || 'Network error' });
+    } catch (e) {
+      setData({ ok: false, error: 'Network error' });
     } finally {
       setLoading(false);
     }
@@ -58,17 +70,45 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
-  return (
-    <main className="min-h-screen max-w-3xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
-      <p className="text-sm text-neutral-600">Pick filters, then generate.</p>
+  function printCurrent() {
+    window.print();
+  }
 
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3">
-        <Select label="Age" value={age} onChange={v=>setAge(v as any)} options={AGE_GROUPS} />
-        <Select label="Genre" value={genre} onChange={v=>setGenre(v as any)} options={GENRES} />
-        <Select label="Length" value={length} onChange={v=>setLength(v as any)} options={LENGTHS} />
-        <Select label="Level" value={level} onChange={v=>setLevel(v as any)} options={LEVELS} />
-        <Select label="Time Period" value={period} onChange={v=>setPeriod(v as any)} options={PERIODS} />
+  function saveFavorite() {
+    if (!data || !data.ok || !data.title || !data.text) return;
+    const meta = [genre, age, length, level, period].join(' · ');
+    const item: Fav = { title: data.title, text: data.text, meta };
+    // de-dup by title + text
+    const exists = favs.find(f => f.title === item.title && f.text === item.text);
+    if (!exists) setFavs([item, ...favs].slice(0, 50));
+  }
+
+  function loadFavorite(idx: number) {
+    const f = favs[idx];
+    if (!f) return;
+    setData({ ok: true, title: f.title, text: f.text });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function removeFavorite(idx: number) {
+    const next = favs.slice(0, idx).concat(favs.slice(idx + 1));
+    setFavs(next);
+  }
+
+  return (
+    <main className="min-h-screen max-w-5xl mx-auto p-6">
+      <header className="print:hidden">
+        <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
+        <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
+      </header>
+
+      {/* Controls */}
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
+        <Select label="Age" value={age} onChange={v=>setAge(v as typeof age)} options={AGE_GROUPS} />
+        <Select label="Genre" value={genre} onChange={v=>setGenre(v as typeof genre)} options={GENRES} />
+        <Select label="Length" value={length} onChange={v=>setLength(v as typeof length)} options={LENGTHS} />
+        <Select label="Level" value={level} onChange={v=>setLevel(v as typeof level)} options={LEVELS} />
+        <Select label="Time Period" value={period} onChange={v=>setPeriod(v as typeof period)} options={PERIODS} />
         <div className="flex items-end">
           <button
             onClick={getMonologue}
@@ -80,23 +120,51 @@ export default function Page() {
         </div>
       </div>
 
+      {/* Output */}
       <div className="mt-6 border-t border-neutral-200 pt-6">
-        {!data && <p className="text-neutral-600 text-sm">No monologue yet.</p>}
+        {!data && <p className="text-neutral-600 text-sm print:hidden">No monologue yet.</p>}
 
         {data && data.ok && (
-          <article>
+          <article className="break-inside-avoid-page">
             <h2 className="text-xl font-medium">{data.title}</h2>
+            <p className="text-xs text-neutral-600 print:hidden">
+              {genre} · {age} · {length} · {level} · {period}
+            </p>
             <pre className="mt-3 whitespace-pre-wrap leading-relaxed">{data.text}</pre>
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap gap-2 print:hidden">
               <button onClick={copyCurrent} className="h-10 px-3 rounded-lg border">Copy</button>
               <button onClick={downloadTxt} className="h-10 px-3 rounded-lg border">Download .txt</button>
+              <button onClick={printCurrent} className="h-10 px-3 rounded-lg border">Print / PDF</button>
+              <button onClick={saveFavorite} className="h-10 px-3 rounded-lg border">Save to Favorites</button>
             </div>
           </article>
         )}
 
-        {data && !data.ok && <p className="text-red-600 text-sm">Error: {data.error}</p>}
+        {data && !data.ok && <p className="text-red-600 text-sm print:hidden">Error: {data.error}</p>}
       </div>
+
+      {/* Favorites */}
+      <section className="mt-10 print:hidden">
+        <h3 className="text-lg font-semibold">Favorites</h3>
+        {favs.length === 0 && <p className="text-sm text-neutral-600 mt-1">No favorites yet.</p>}
+        <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+          {favs.map((f, idx) => (
+            <li key={`${f.title}-${idx}`} className="border rounded-lg p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium">{f.title}</div>
+                  <div className="text-xs text-neutral-600 mt-0.5">{f.meta}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>loadFavorite(idx)} className="text-xs px-2 py-1 rounded border">Load</button>
+                  <button onClick={()=>removeFavorite(idx)} className="text-xs px-2 py-1 rounded border">Remove</button>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
     </main>
   );
 }
