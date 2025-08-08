@@ -31,6 +31,38 @@ export default function Page() {
     try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch { /* noop */ }
   }, [favs]);
 
+  // ---- Shareable links: read filters from URL on first load
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+
+    const get = (k: string) => params.get(k) || '';
+
+    const fromList = <T extends string>(val: string, list: readonly T[], fallback: T): T =>
+      (list as readonly string[]).includes(val) ? (val as T) : fallback;
+
+    setAge(fromList(get('age'), AGE_GROUPS, 'Teens 14–17'));
+    setGenre(fromList(get('genre'), GENRES, 'Comedy'));
+    setLength(fromList(get('length'), LENGTHS, 'Medium (45–60s)'));
+    setLevel(fromList(get('level'), LEVELS, 'Beginner'));
+    setPeriod(fromList(get('period'), PERIODS, 'Contemporary'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Shareable links: write filters to URL when they change
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams();
+    params.set('age', age);
+    params.set('genre', genre);
+    params.set('length', length);
+    params.set('level', level);
+    params.set('period', period);
+    const qs = `?${params.toString()}`;
+    const newUrl = window.location.pathname + qs;
+    window.history.replaceState({}, '', newUrl);
+  }, [age, genre, length, level, period]);
+
   async function getMonologue() {
     setLoading(true);
     setData(null);
@@ -102,6 +134,7 @@ export default function Page() {
         <InstallPrompt />
       </header>
 
+      {/* Controls */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
         <Select label="Age" value={age} onChange={v=>setAge(v as typeof age)} options={AGE_GROUPS} />
         <Select label="Genre" value={genre} onChange={v=>setGenre(v as typeof genre)} options={GENRES} />
@@ -119,6 +152,7 @@ export default function Page() {
         </div>
       </div>
 
+      {/* Output */}
       <div className="mt-6 border-t border-neutral-200 pt-6">
         {!data && <p className="text-neutral-600 text-sm print:hidden">No monologue yet.</p>}
 
@@ -142,6 +176,7 @@ export default function Page() {
         {data && !data.ok && <p className="text-red-600 text-sm print:hidden">Error: {data.error}</p>}
       </div>
 
+      {/* Favorites */}
       <section className="mt-10 print:hidden">
         <h3 className="text-lg font-semibold">Favorites</h3>
         {favs.length === 0 && <p className="text-sm text-neutral-600 mt-1">No favorites yet.</p>}
