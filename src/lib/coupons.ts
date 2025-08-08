@@ -24,7 +24,7 @@ async function seedDefaultFromEnv() {
       const exists = await client.exists(COUPON_PREFIX + key);
       if (!exists) {
         await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
-        await client.sadd(COUPON_INDEX, key); // keep index in sync
+        try { await client.sadd(COUPON_INDEX, key); } catch { /* ignore WRONGTYPE on old index */ }
       }
     } catch {
       /* ignore seed errors */
@@ -58,7 +58,8 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
 
   if (client) {
     await client.set(COUPON_PREFIX + key, JSON.stringify({ minutes, uses }));
-    await client.sadd(COUPON_INDEX, key); // index first-class
+    // Best effort: keep index updated, but don't let WRONGTYPE kill the request
+    try { await client.sadd(COUPON_INDEX, key); } catch { /* ignore */ }
   } else {
     memCoupons.set(key, { minutes, uses });
   }
@@ -69,10 +70,15 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
 
   if (client) {
     try {
-      // 1) Prefer the index (fast)
-      let codes = (await client.smembers(COUPON_INDEX)) as unknown as string[] | null;
+      // 1) Prefer the index (fast) — tolerate WRONGTYPE by falling back
+      let codes: string[] | null = null;
+      try {
+        codes = (await client.smembers(COUPON_INDEX)) as unknown as string[] | null;
+      } catch {
+        codes = null;
+      }
 
-      // 2) Fallback: discover via KEYS (if index empty or missing)
+      // 2) Fallback: discover via KEYS (if index empty/missing/wrongtype)
       if (!codes || codes.length === 0) {
         const keys = (await client.keys(`${COUPON_PREFIX}*`)) as unknown as string[] | null;
         codes = (keys || [])
@@ -84,7 +90,10 @@ export async function listCoupons(): Promise<{ code: string; minutes: number; us
 
       // Fetch values in parallel
       const vals = await Promise.all(
-        codes.map((c) => client.get(COUPON_PREFIX + c) as Promise<string | null>)
+        codes.map(async (c) => {
+          try { return await client.get(COUPON_PREFIX + c) as string | null; }
+          catch { return null; }
+        })
       );
 
       const out: { code: string; minutes: number; uses: number }[] = [];
@@ -137,6 +146,7 @@ export async function debugList(): Promise<{
     itemsByKey: {} as Record<string, CouponTemplate | null>,
   };
 
+  // Read index (ignore WRONGTYPE)
   try {
     const codes = (await client.smembers(COUPON_INDEX)) as unknown as string[] | null;
     out.indexCodes = codes || [];
@@ -144,6 +154,7 @@ export async function debugList(): Promise<{
     out.indexCodes = [];
   }
 
+  // Read all keys
   try {
     const keys = (await client.keys(`${COUPON_PREFIX}*`)) as unknown as string[] | null;
     out.keyPattern = keys || [];
@@ -151,27 +162,25 @@ export async function debugList(): Promise<{
     out.keyPattern = [];
   }
 
-  // Read values (best-effort)
-  if (out.indexCodes.length) {
-    const vals = await Promise.all(
-      out.indexCodes.map((c) => client.get(COUPON_PREFIX + c) as Promise<string | null>)
-    );
-    out.indexCodes.forEach((c, i) => {
-      const raw = vals[i];
-      try { out.itemsByCode[c] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null; }
-      catch { out.itemsByCode[c] = null; }
-    });
+  // Values by code (safe)
+  for (const c of out.indexCodes) {
+    try {
+      const raw = await client.get(COUPON_PREFIX + c);
+      out.itemsByCode[c] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+    } catch {
+      out.itemsByCode[c] = null;
+    }
   }
 
-  if (out.keyPattern.length) {
-    const vals = await Promise.all(
-      out.keyPattern.map((k) => client.get(k) as Promise<string | null>)
-    );
-    out.keyPattern.forEach((k, i) => {
-      const raw = vals[i];
-      try { out.itemsByKey[k] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null; }
-      catch { out.itemsByKey[k] = null; }
-    });
+  // Values by key (safe; skip the index key which may be a set)
+  for (const k of out.keyPattern) {
+    if (k === COUPON_INDEX) continue;
+    try {
+      const raw = await client.get(k);
+      out.itemsByKey[k] = raw ? (JSON.parse(String(raw)) as CouponTemplate) : null;
+    } catch {
+      out.itemsByKey[k] = null;
+    }
   }
 
   return out;
