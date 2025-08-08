@@ -29,7 +29,7 @@ export default function RootLayout({
         <link rel="manifest" href="/manifest.webmanifest" />
         <meta name="theme-color" content="#000000" />
 
-        {/* App icons (we'll add the PNGs next) */}
+        {/* App icons */}
         <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
         <link rel="icon" href="/icons/icon-512.png" sizes="512x512" />
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
@@ -40,6 +40,19 @@ export default function RootLayout({
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
+
+        {/* Register the service worker */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                  navigator.serviceWorker.register('/sw.js').catch(() => {});
+                });
+              }
+            `,
+          }}
+        />
       </body>
     </html>
   );
