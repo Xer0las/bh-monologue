@@ -30,14 +30,15 @@ export async function GET(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // --- Daily quota shared with non-streaming: 50/day
-    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 50 });
+    // --- Daily quota (shared across streaming + non-streaming): 10 per 24h
+    const dq = take(`day:${ip}`, { windowMs: 86_400_000, max: 10 });
     if (!dq.allowed) {
-      return new Response(`Daily limit reached (50/day). Try again in ${Math.ceil(dq.resetMs / 1000)}s.`, {
-        status: 429,
-        headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)), "Content-Type": "text/plain" }
-      });
+      return NextResponse.json(
+        { ok: false, error: `You've reached today's free limit (10). Each generation costs us a little to run. Please consider donating to keep Banzerini House’s theatre thriving: https://www.banzerinihouse.org/donate` },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(dq.resetMs / 1000)) } }
+      );
     }
+
 
     // --- Per-minute guardrail for streaming: 6/min
     const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
