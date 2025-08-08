@@ -9,8 +9,10 @@ const PERIODS = ['Contemporary','Classic / Historical'] as const;
 
 type Monologue = { ok: boolean; title?: string; text?: string; error?: string };
 type Fav = { title: string; text: string; meta: string };
+type LimitInfo = { message: string; retryAfter?: number };
 
 const FAVS_KEY = 'bh_monologue_favs_v1';
+const DONATE_URL = 'https://www.banzerinihouse.org/donate';
 
 export default function Page() {
   const [age, setAge] = useState<typeof AGE_GROUPS[number]>('Teens 14–17');
@@ -22,6 +24,7 @@ export default function Page() {
   const [data, setData] = useState<Monologue | null>(null);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [limit, setLimit] = useState<LimitInfo | null>(null);
 
   const [favs, setFavs] = useState<Fav[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -78,6 +81,22 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ age, genre, length, level, period }),
       });
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          let msg = 'Limit reached. Please try again later.';
+          try {
+            const j = await res.json();
+            msg = j?.error || msg;
+          } catch {}
+          const ra = parseInt(res.headers.get('Retry-After') || '0', 10);
+          setLimit({ message: msg, retryAfter: Number.isFinite(ra) ? ra : undefined });
+          return;
+        }
+        setData({ ok: false, error: `HTTP ${res.status}` });
+        return;
+      }
+
       const json = (await res.json()) as Monologue;
       setData(json);
     } catch {
@@ -89,14 +108,30 @@ export default function Page() {
 
   async function getMonologueStream() {
     track('generate_clicked', { age, genre, length, level, period });
+    setLimit(null);
 
     setLoading(false);
     setStreaming(true);
     setData({ ok: true, title: '...', text: '' });
+
     try {
       const params = new URLSearchParams({ age, genre, length, level, period });
       const res = await fetch(`/api/monologue/stream?${params.toString()}`, { cache: 'no-store' });
-      if (!res.ok || !res.body) {
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          const msg = await res.text();
+          const ra = parseInt(res.headers.get('Retry-After') || '0', 10);
+          setLimit({ message: msg || 'Limit reached. Please try again later.', retryAfter: Number.isFinite(ra) ? ra : undefined });
+          setStreaming(false);
+          return;
+        }
+        await getMonologueClassic();
+        setStreaming(false);
+        return;
+      }
+
+      if (!res.body) {
         await getMonologueClassic();
         setStreaming(false);
         return;
@@ -198,15 +233,48 @@ export default function Page() {
           <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
           <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
         </div>
-        <a
-          href="https://www.banzerinihouse.org/membership"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="h-10 px-4 rounded-lg bg-black text-white flex items-center justify-center"
-        >
-          JOIN OUR PROGRAM!
-        </a>
+        <div className="flex gap-2">
+          <a
+            href="https://www.banzerinihouse.org/membership"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="h-10 px-4 rounded-lg bg-black text-white flex items-center justify-center"
+          >
+            JOIN OUR PROGRAM!
+          </a>
+          <a
+            href={DONATE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="h-10 px-4 rounded-lg border flex items-center justify-center"
+            title="Help keep the theatre alive"
+          >
+            KEEP THE THEATRE ALIVE!
+          </a>
+        </div>
       </header>
+
+      {/* Limit banner */}
+      {limit && (
+        <div className="mt-4 rounded-lg border border-yellow-300 bg-yellow-50 p-3">
+          <div className="text-sm">
+            {limit.message}
+            {typeof limit.retryAfter === 'number' && limit.retryAfter > 0 ? (
+              <> Try again in about <strong>{limit.retryAfter}</strong> seconds.</>
+            ) : null}
+          </div>
+          <div className="mt-2">
+            <a
+              href={DONATE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block h-9 px-3 rounded border bg-black text-white"
+            >
+              Donate
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* Controls (hidden on print) */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
