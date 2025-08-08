@@ -111,14 +111,20 @@ export default function AdminManagePage() {
 
       <section style={{ margin: '16px 0', padding: 12, border: '1px solid #ddd' }}>
         <h2>Admin Key</h2>
-        <input
-          type="password"
-          placeholder="Enter admin key"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          style={{ width: '60%' }}
-        />
-        <button onClick={saveKey} style={{ marginLeft: 8 }}>Use Key</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label htmlFor="admin-key" style={{ minWidth: 90 }}>Key</label>
+          <input
+            id="admin-key"
+            name="adminKey"
+            type="password"
+            placeholder="Enter admin key"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            style={{ width: '60%' }}
+            autoComplete="off"
+          />
+          <button onClick={saveKey} style={{ marginLeft: 8 }}>Use Key</button>
+        </div>
         {err && <p style={{ color: 'crimson' }}>{err}</p>}
       </section>
 
@@ -180,31 +186,47 @@ export default function AdminManagePage() {
 
       <section style={{ margin: '16px 0', padding: 12, border: '1px solid #ddd' }}>
         <h2>Create / Update Coupon</h2>
-        <form onSubmit={createCoupon}>
-          <input
-            placeholder="code (e.g., chickenpotpie2)"
-            value={form.code}
-            onChange={(e) => setForm({ ...form, code: e.target.value })}
-            required
-            style={{ width: 240 }}
-          />
-          <input
-            type="number"
-            placeholder="minutes"
-            value={form.minutes}
-            onChange={(e) => setForm({ ...form, minutes: Number(e.target.value) })}
-            required
-            style={{ width: 120, marginLeft: 8 }}
-          />
-          <input
-            type="number"
-            placeholder="uses"
-            value={form.uses}
-            onChange={(e) => setForm({ ...form, uses: Number(e.target.value) })}
-            required
-            style={{ width: 120, marginLeft: 8 }}
-          />
-          <button type="submit" style={{ marginLeft: 8 }}>Save</button>
+        <form onSubmit={createCoupon} noValidate>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <label htmlFor="coupon-code" style={{ minWidth: 90 }}>Code</label>
+            <input
+              id="coupon-code"
+              name="code"
+              placeholder="code (e.g., chickenpotpie2)"
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              required
+              style={{ width: 240 }}
+              autoComplete="off"
+            />
+            <label htmlFor="coupon-minutes" style={{ minWidth: 90 }}>Minutes</label>
+            <input
+              id="coupon-minutes"
+              name="minutes"
+              type="number"
+              placeholder="minutes"
+              value={form.minutes}
+              onChange={(e) => setForm({ ...form, minutes: Number(e.target.value) })}
+              required
+              style={{ width: 140 }}
+              autoComplete="off"
+              inputMode="numeric"
+            />
+            <label htmlFor="coupon-uses" style={{ minWidth: 90 }}>Uses</label>
+            <input
+              id="coupon-uses"
+              name="uses"
+              type="number"
+              placeholder="uses"
+              value={form.uses}
+              onChange={(e) => setForm({ ...form, uses: Number(e.target.value) })}
+              required
+              style={{ width: 140 }}
+              autoComplete="off"
+              inputMode="numeric"
+            />
+            <button type="submit" style={{ marginLeft: 8 }}>Save</button>
+          </div>
         </form>
         <h3 style={{ marginTop: 16 }}>Existing Coupons</h3>
         <ul>
