@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listCoupons, upsertCoupon } from '@/lib/coupons';
 import { assertAdmin } from '@/lib/admin';
 
+export const runtime = 'nodejs';
+
 export async function GET(req: NextRequest) {
   const auth = assertAdmin(req);
   if (auth) return auth;
-  return NextResponse.json({ coupons: await listCoupons() });
+  const body = { coupons: await listCoupons() };
+  return NextResponse.json(body, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function POST(req: NextRequest) {
@@ -17,5 +20,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'code, minutes, and uses are required' }, { status: 400 });
   }
   await upsertCoupon(String(code), Number(minutes), Number(uses));
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
 }
