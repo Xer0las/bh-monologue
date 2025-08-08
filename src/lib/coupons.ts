@@ -1,9 +1,15 @@
 import { redis } from './kv';
 
 export type CouponTemplate = { minutes: number; uses: number };
-const COUPONS_HASH = 'coupons';
 
-// Seed default from env exactly once (best-effort; ignores errors).
+// Redis keys
+const COUPON_KEY = (code: string) => `coupon:${code.toLowerCase()}`;
+const COUPON_INDEX = 'coupon:index';
+
+// In-memory fallback when Redis env vars aren't set
+const memCoupons = new Map<string, CouponTemplate>();
+
+// Seed default from env once (best-effort)
 async function seedDefaultFromEnv() {
   const code = process.env.COUPON_CODE;
   const minutes = parseInt(process.env.COUPON_MINUTES || '0', 10);
@@ -11,21 +17,29 @@ async function seedDefaultFromEnv() {
   if (!code || minutes <= 0 || uses <= 0) return;
 
   const key = code.toLowerCase();
+
   if (redis) {
-    const exists = await redis.hexists(COUPONS_HASH, key);
-    if (!exists) await redis.hset(COUPONS_HASH, { [key]: JSON.stringify({ minutes, uses }) });
+    try {
+      const exists = await redis.exists(COUPON_KEY(key));
+      if (!exists) {
+        await redis.set(COUPON_KEY(key), JSON.stringify({ minutes, uses }));
+        await redis.sadd(COUPON_INDEX, key);
+      }
+    } catch {
+      // ignore seed errors
+    }
   } else {
-    memCoupons.set(key, { minutes, uses });
+    if (!memCoupons.has(key)) memCoupons.set(key, { minutes, uses });
   }
 }
-const memCoupons = new Map<string, CouponTemplate>();
 seedDefaultFromEnv().catch(() => {});
 
-// Unified async API (works with Redis or in-memory)
+// Unified async API
+
 export async function getCouponTemplate(code: string): Promise<CouponTemplate | null> {
   const key = code.toLowerCase();
   if (redis) {
-    const raw = await redis.hget<string>(COUPONS_HASH, key);
+    const raw = await redis.get<string>(COUPON_KEY(key));
     return raw ? (JSON.parse(raw) as CouponTemplate) : null;
   }
   return memCoupons.get(key) ?? null;
@@ -34,7 +48,8 @@ export async function getCouponTemplate(code: string): Promise<CouponTemplate | 
 export async function upsertCoupon(code: string, minutes: number, uses: number) {
   const key = code.toLowerCase();
   if (redis) {
-    await redis.hset(COUPONS_HASH, { [key]: JSON.stringify({ minutes, uses }) });
+    await redis.set(COUPON_KEY(key), JSON.stringify({ minutes, uses }));
+    await redis.sadd(COUPON_INDEX, key);
   } else {
     memCoupons.set(key, { minutes, uses });
   }
@@ -42,11 +57,21 @@ export async function upsertCoupon(code: string, minutes: number, uses: number) 
 
 export async function listCoupons(): Promise<{ code: string; minutes: number; uses: number }[]> {
   if (redis) {
-    const all = await redis.hgetall<Record<string, string>>(COUPONS_HASH);
+    const codes = await redis.smembers<string>(COUPON_INDEX);
+    if (!codes || codes.length === 0) return [];
+    // Fetch all in parallel
+    const raws = await Promise.all(codes.map((c) => redis.get<string>(COUPON_KEY(c))));
     const out: { code: string; minutes: number; uses: number }[] = [];
-    if (all) for (const [code, raw] of Object.entries(all)) {
-      try { const tpl = JSON.parse(raw); out.push({ code, ...tpl }); } catch {}
-    }
+    codes.forEach((c, i) => {
+      const raw = raws[i];
+      if (!raw) return;
+      try {
+        const tpl = JSON.parse(raw) as CouponTemplate;
+        out.push({ code: c, ...tpl });
+      } catch {
+        // ignore bad entries
+      }
+    });
     return out;
   }
   return Array.from(memCoupons.entries()).map(([code, v]) => ({ code, ...v }));
