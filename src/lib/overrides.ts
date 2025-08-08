@@ -17,7 +17,7 @@ export function getOverride(ip: string): Override | null {
   return o;
 }
 
-// Call this in your rate limit check to spend one use (returns true if allowed)
+/** Core consume: spend one use if an override exists and has remaining. */
 export function consume(ip: string): boolean {
   const o = getOverride(ip);
   if (!o || o.remaining <= 0) return false;
@@ -34,4 +34,14 @@ export function listOverrides() {
   return Array.from(overrides.entries())
     .filter(([_, o]) => o.expiresAt > now)
     .map(([ip, o]) => ({ ip, remaining: o.remaining, expiresInMs: o.expiresAt - now }));
+}
+
+/** --- Compatibility wrappers expected by your monologue routes --- */
+export function hasOverride(ip: string): boolean {
+  const o = getOverride(ip);
+  return !!(o && o.remaining > 0);
+}
+
+export function consumeOverride(ip: string): boolean {
+  return consume(ip);
 }
