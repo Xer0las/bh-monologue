@@ -78,7 +78,6 @@ export default function Page() {
     if (!data || !data.ok || !data.title || !data.text) return;
     const meta = [genre, age, length, level, period].join(' · ');
     const item: Fav = { title: data.title, text: data.text, meta };
-    // de-dup by title + text
     const exists = favs.find(f => f.title === item.title && f.text === item.text);
     if (!exists) setFavs([item, ...favs].slice(0, 50));
   }
@@ -100,9 +99,9 @@ export default function Page() {
       <header className="print:hidden">
         <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
         <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
+        <InstallPrompt />
       </header>
 
-      {/* Controls */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
         <Select label="Age" value={age} onChange={v=>setAge(v as typeof age)} options={AGE_GROUPS} />
         <Select label="Genre" value={genre} onChange={v=>setGenre(v as typeof genre)} options={GENRES} />
@@ -120,7 +119,6 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Output */}
       <div className="mt-6 border-t border-neutral-200 pt-6">
         {!data && <p className="text-neutral-600 text-sm print:hidden">No monologue yet.</p>}
 
@@ -144,7 +142,6 @@ export default function Page() {
         {data && !data.ok && <p className="text-red-600 text-sm print:hidden">Error: {data.error}</p>}
       </div>
 
-      {/* Favorites */}
       <section className="mt-10 print:hidden">
         <h3 className="text-lg font-semibold">Favorites</h3>
         {favs.length === 0 && <p className="text-sm text-neutral-600 mt-1">No favorites yet.</p>}
@@ -195,4 +192,40 @@ function Select<T extends string>({
 
 function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+/** Inline install banner **/
+function InstallPrompt() {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShow(true);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  if (!show) return null;
+
+  async function doInstall() {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    setShow(false);
+    setDeferredPrompt(null);
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border p-3 bg-neutral-50 flex items-center justify-between">
+      <span className="text-sm">Install this app for quick access.</span>
+      <div className="flex gap-2">
+        <button onClick={doInstall} className="h-9 px-3 rounded border">Install</button>
+        <button onClick={()=>setShow(false)} className="h-9 px-3 rounded border">Not now</button>
+      </div>
+    </div>
+  );
 }
