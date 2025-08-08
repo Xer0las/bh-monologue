@@ -29,6 +29,18 @@ export default function Page() {
   });
   useEffect(() => { try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch {} }, [favs]);
 
+  // Fire-and-forget metrics helper
+  function track(event: string, payload?: Record<string, unknown>) {
+    try {
+      fetch('/api/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, data: payload || {} }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+  }
+
   // Read filters from URL on first load
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -42,6 +54,9 @@ export default function Page() {
     setLength(fromList(get('length'), LENGTHS, 'Medium (45–60s)'));
     setLevel(fromList(get('level'), LEVELS, 'Beginner'));
     setPeriod(fromList(get('period'), PERIODS, 'Contemporary'));
+
+    // Track pageview
+    track('pageview', { path: window.location.pathname, qs: window.location.search });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -77,6 +92,9 @@ export default function Page() {
   }
 
   async function getMonologueStream() {
+    // Track button click with current filters
+    track('generate_clicked', { age, genre, length, level, period });
+
     setLoading(false);
     setStreaming(true);
     setData({ ok: true, title: '...', text: '' });
@@ -249,7 +267,7 @@ export default function Page() {
         </ul>
       </section>
 
-      {/* Install banner moved to bottom */}
+      {/* Install banner at bottom */}
       <footer className="mt-10 print:hidden">
         <InstallPrompt />
       </footer>
