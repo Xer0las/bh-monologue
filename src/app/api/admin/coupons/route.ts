@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listCoupons, upsertCoupon } from '@/lib/coupons';
+import { listCoupons, upsertCoupon, deleteCoupon } from '@/lib/coupons';
 import { assertAdmin } from '@/lib/admin';
 
 export const runtime = 'nodejs';
@@ -34,4 +34,17 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'create error' }, { status: 500 });
   }
+}
+
+export async function DELETE(req: NextRequest) {
+  const auth = assertAdmin(req);
+  if (auth) return auth;
+
+  const { searchParams } = new URL(req.url);
+  const code = searchParams.get('code');
+  if (!code) return NextResponse.json({ error: 'code is required' }, { status: 400 });
+
+  const ok = await deleteCoupon(code);
+  const coupons = await listCoupons();
+  return NextResponse.json({ ok, count: coupons.length }, { headers: { 'Cache-Control': 'no-store' } });
 }
