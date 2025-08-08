@@ -35,14 +35,14 @@ export async function POST(req: Request) {
       age = "Teens 14–17",
       genre = "Comedy",
       length = "Medium (45–60s)",
-      level = "PG (Beginner)",
+      level = "Beginner",
       period = "Contemporary",
     } = await req.json().catch(() => ({}));
 
     const [minW, maxW] = lengthToRange(length);
 
     const styleGuide =
-      level.startsWith("PG")
+      level.startsWith("Beginner")
         ? "Use simpler vocabulary, shorter sentences, clear beats, gentle stakes."
         : "Use richer vocabulary, subtext, sharper turns, denser imagery—still family-safe for the selected age.";
 
