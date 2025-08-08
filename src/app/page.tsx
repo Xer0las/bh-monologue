@@ -10,6 +10,7 @@ const PERIODS = ['Contemporary','Classic / Historical'] as const;
 type Monologue = { ok: boolean; title?: string; text?: string; error?: string };
 type Fav = { title: string; text: string; meta: string };
 type LimitInfo = { message: string; retryAfter?: number };
+type CouponStatus = { unlocked: boolean; remaining?: number | null; secondsLeft?: number | null };
 
 const FAVS_KEY = 'bh_monologue_favs_v1';
 const DONATE_URL = 'https://www.banzerinihouse.org/donate';
@@ -25,6 +26,12 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [limit, setLimit] = useState<LimitInfo | null>(null);
+
+  // coupon
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [couponCode, setCouponCode] = useState('');
+  const [couponStatus, setCouponStatus] = useState<CouponStatus>({ unlocked: false });
+  const unlocked = !!couponStatus?.unlocked;
 
   const [favs, setFavs] = useState<Fav[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -43,6 +50,7 @@ export default function Page() {
     } catch {}
   }
 
+  // initial inits
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -57,9 +65,15 @@ export default function Page() {
     setPeriod(fromList(get('period'), PERIODS, 'Contemporary'));
 
     track('pageview', { path: window.location.pathname, qs: window.location.search });
+
+    // fetch coupon status
+    fetch('/api/coupon', { cache: 'no-store' })
+      .then(r => r.json()).then(j => setCouponStatus({ unlocked: !!j?.unlocked, remaining: j?.remaining ?? null, secondsLeft: j?.secondsLeft ?? null }))
+      .catch(()=>{});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // keep URL in sync with filters
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams();
@@ -85,10 +99,7 @@ export default function Page() {
       if (!res.ok) {
         if (res.status === 429) {
           let msg = 'Limit reached. Please try again later.';
-          try {
-            const j = await res.json();
-            msg = j?.error || msg;
-          } catch {}
+          try { msg = (await res.json())?.error || msg; } catch {}
           const ra = parseInt(res.headers.get('Retry-After') || '0', 10);
           setLimit({ message: msg, retryAfter: Number.isFinite(ra) ? ra : undefined });
           return;
@@ -182,6 +193,28 @@ export default function Page() {
     }
   }
 
+  async function applyCoupon() {
+    try {
+      const res = await fetch('/api/coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: couponCode }),
+      });
+      const j = await res.json();
+      if (!res.ok) {
+        alert(j?.error || 'Invalid code.');
+        return;
+      }
+      setCouponStatus({ unlocked: true, remaining: j?.uses ?? null, secondsLeft: j?.minutes ? j.minutes * 60 : null });
+      setCouponCode('');
+      setCouponOpen(false);
+      setLimit(null);
+      alert('Unlocked! Your limit is lifted on this connection.');
+    } catch {
+      alert('Network error. Please try again.');
+    }
+  }
+
   async function copyCurrent() {
     if (!data || !data.ok) return;
     const header = `${data.title}\n\n`;
@@ -214,8 +247,7 @@ export default function Page() {
   }
 
   function loadFavorite(idx: number) {
-    const f = favs[idx];
-    if (!f) return;
+    const f = favs[idx]; if (!f) return;
     setData({ ok: true, title: f.title, text: f.text });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -227,28 +259,17 @@ export default function Page() {
 
   return (
     <main className="min-h-screen max-w-5xl mx-auto p-6">
-      {/* Header shown in print and PWA */}
+      {/* Header (prints too) */}
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Banzerini House · Monologue Generator</h1>
           <p className="text-sm text-neutral-600">Pick filters, then generate. Save your favorites, print, copy, or download.</p>
         </div>
         <div className="flex gap-2">
-          <a
-            href="https://www.banzerinihouse.org/membership"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="h-10 px-4 rounded-lg bg-black text-white flex items-center justify-center"
-          >
+          <a href="https://www.banzerinihouse.org/membership" target="_blank" rel="noopener noreferrer" className="h-10 px-4 rounded-lg bg-black text-white flex items-center justify-center">
             JOIN OUR PROGRAM!
           </a>
-          <a
-            href={DONATE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="h-10 px-4 rounded-lg border flex items-center justify-center"
-            title="Help keep the theatre alive"
-          >
+          <a href={DONATE_URL} target="_blank" rel="noopener noreferrer" className="h-10 px-4 rounded-lg border flex items-center justify-center" title="Help keep the theatre alive">
             KEEP THE THEATRE ALIVE!
           </a>
         </div>
@@ -264,17 +285,45 @@ export default function Page() {
             ) : null}
           </div>
           <div className="mt-2">
-            <a
-              href={DONATE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block h-9 px-3 rounded border bg-black text-white"
-            >
+            <a href={DONATE_URL} target="_blank" rel="noopener noreferrer" className="inline-block h-9 px-3 rounded border bg-black text-white">
               Donate
             </a>
           </div>
         </div>
       )}
+
+      {/* Coupon box */}
+      <section className="mt-4 print:hidden">
+        <div className="rounded-lg border p-3 bg-neutral-50">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm">
+              {unlocked ? (
+                <span className="text-green-700">Access unlocked on this connection.</span>
+              ) : (
+                <span>Have a code?</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {!unlocked && (
+                <button onClick={() => setCouponOpen(v => !v)} className="h-9 px-3 rounded border">
+                  {couponOpen ? 'Hide' : 'Enter code'}
+                </button>
+              )}
+            </div>
+          </div>
+          {!unlocked && couponOpen && (
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                value={couponCode}
+                onChange={(e)=>setCouponCode(e.target.value)}
+                placeholder="Enter coupon code"
+                className="h-9 px-3 rounded border w-full"
+              />
+              <button onClick={applyCoupon} className="h-9 px-3 rounded border bg-black text-white">Apply</button>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Controls (hidden on print) */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-6 gap-3 print:hidden">
@@ -284,12 +333,7 @@ export default function Page() {
         <Select label="Level" value={level} onChange={v=>setLevel(v as typeof level)} options={LEVELS} />
         <Select label="Time Period" value={period} onChange={v=>setPeriod(v as typeof period)} options={PERIODS} />
         <div className="flex items-end gap-2">
-          <button
-            onClick={getMonologueStream}
-            disabled={streaming}
-            className="h-10 w-full rounded-lg bg-black text-white disabled:opacity-50"
-            title="Streams live text"
-          >
+          <button onClick={getMonologueStream} disabled={streaming} className="h-10 w-full rounded-lg bg-black text-white disabled:opacity-50" title="Streams live text">
             {streaming ? 'Generating…' : 'Get Monologue'}
           </button>
         </div>
@@ -307,7 +351,7 @@ export default function Page() {
             </p>
             <pre className="mt-3 whitespace-pre-wrap leading-relaxed">{data.text}</pre>
 
-            {/* Branded attribution — visible on screen AND print */}
+            {/* Attribution */}
             <p className="mt-6 text-xs text-neutral-600">
               Created with the <strong>Banzerini House Monologue Generator</strong> —{' '}
               <a href="https://www.banzerinihouse.org" target="_blank" rel="noopener noreferrer" className="underline">
@@ -349,12 +393,12 @@ export default function Page() {
         </ul>
       </section>
 
-      {/* Install banner stays hidden in print */}
+      {/* Install banner */}
       <footer className="mt-10 print:hidden">
         <InstallPrompt />
       </footer>
 
-      {/* Site footer (light, prints too) */}
+      {/* Site footer */}
       <div className="mt-8 text-center text-xs text-neutral-500">
         © {new Date().getFullYear()} Banzerini House • banzerinihouse.org
       </div>
@@ -362,22 +406,13 @@ export default function Page() {
   );
 }
 
-function Select<T extends string>({
-  label, value, onChange, options,
-}:{
-  label: string;
-  value: T;
-  onChange: (v: T)=>void;
-  options: readonly T[] | T[];
+function Select<T extends string>({ label, value, onChange, options }:{
+  label: string; value: T; onChange: (v: T)=>void; options: readonly T[] | T[];
 }) {
   return (
     <label className="grid gap-1 text-sm">
       <span className="font-medium">{label}</span>
-      <select
-        className="h-10 w-full rounded-lg border px-3"
-        value={value}
-        onChange={(e)=>onChange(e.target.value as T)}
-      >
+      <select className="h-10 w-full rounded-lg border px-3" value={value} onChange={(e)=>onChange(e.target.value as T)}>
         {options.map((opt)=>(
           <option key={opt as string} value={opt as string}>{opt as string}</option>
         ))}
@@ -394,19 +429,12 @@ function slugify(s: string) {
 function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [show, setShow] = useState(false);
-
   useEffect(() => {
-    const handler = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setShow(true);
-    };
+    const handler = (e: any) => { e.preventDefault(); setDeferredPrompt(e); setShow(true); };
     window.addEventListener('beforeinstallprompt', handler);
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
-
   if (!show) return null;
-
   async function doInstall() {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
@@ -414,7 +442,6 @@ function InstallPrompt() {
     setShow(false);
     setDeferredPrompt(null);
   }
-
   return (
     <div className="rounded-lg border p-3 bg-neutral-50 flex items-center justify-between">
       <span className="text-sm">Install this app for quick access.</span>
