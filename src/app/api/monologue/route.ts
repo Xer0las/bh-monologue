@@ -1,6 +1,8 @@
 // src/app/api/monologue/route.ts
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 import OpenAI from "openai";
+import { take } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -31,25 +33,34 @@ export function GET() {
 
 export async function POST(req: Request) {
   try {
-    const {
-      age = "Teens 14–17",
-      genre = "Comedy",
-      length = "Medium (45–60s)",
-      level = "Beginner",
-      period = "Contemporary",
-    } = await req.json().catch(() => ({}));
+    const { age = "Teens 14–17", genre = "Comedy", length = "Medium (45–60s)", level = "Beginner", period = "Contemporary" } =
+      await req.json().catch(() => ({}));
 
     const [minW, maxW] = lengthToRange(length);
-
     const styleGuide =
-      level.startsWith("Beginner")
+      String(level).startsWith("Beginner")
         ? "Use simpler vocabulary, shorter sentences, clear beats, gentle stakes."
-        : "Use richer vocabulary, subtext, sharper turns, denser imagery—still family-safe for the selected age.";
-
+        : "Use richer vocabulary, subtext, sharper turns, and denser imagery—still family-safe for the selected age.";
     const periodGuide =
-      period.startsWith("Classic")
+      String(period).startsWith("Classic")
         ? "Lightly heightened, period-appropriate diction; avoid archaic clutter; keep clarity for youth; do NOT imitate existing authors."
-        : "Use present-day, natural speech rhythms."
+        : "Use present-day, natural speech rhythms.";
+
+    // --- Rate limit by IP (8/min for non-streaming)
+    const h = await headers();
+    const ip =
+      h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      h.get("cf-connecting-ip") ||
+      "unknown";
+    const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { ok: false, error: `Too many requests. Try again in ${Math.ceil(rl.resetMs / 1000)}s.` },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetMs / 1000)) } }
+      );
+    }
+
+    console.log(`[gen] ip=${ip} age="${age}" genre="${genre}" length="${length}" level="${level}" period="${period}"`);
 
     const prompt =
       `Write a brand-new audition monologue for a ${age} actor.\n` +
