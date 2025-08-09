@@ -25,7 +25,8 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    const h = headers();
+    // NOTE: await headers() for TS compatibility
+    const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
