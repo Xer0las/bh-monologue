@@ -25,16 +25,15 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    // Important: await headers() so TS is happy in all envs
     const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = hasOverride(ip);
+    // await here
+    const override = await hasOverride(ip);
     if (!override) {
-      // Burst quota: 10 per 5 minutes (shared)
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
       if (!dq.allowed) {
         const msg =
@@ -48,7 +47,6 @@ export async function GET(req: Request) {
         });
       }
 
-      // Per-minute guardrail for streaming
       const rl = take(`stream:${ip}`, { windowMs: 60_000, max: 6 });
       if (!rl.allowed) {
         return new Response(
@@ -63,7 +61,8 @@ export async function GET(req: Request) {
         );
       }
     } else {
-      consumeOverride(ip);
+      // await here
+      await consumeOverride(ip);
       console.log(`[override] stream bypass ip=${ip}`);
     }
 
@@ -91,10 +90,8 @@ export async function GET(req: Request) {
       `Blank line\n` +
       `Then the monologue text.`;
 
-    // Record stats (best effort)
     recordGeneration({ age, genre, length, level, period }).catch(() => {});
 
-    // Stream plain text back
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
