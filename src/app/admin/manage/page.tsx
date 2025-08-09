@@ -1,315 +1,651 @@
-"use client";
+'use client';
+import { useEffect, useMemo, useState } from 'react';
 
-import React, { useEffect, useMemo, useState } from "react";
+type OverrideRow = { ip: string; remaining: number; expiresInSeconds: number };
+type CouponRow = { code: string; minutes: number; uses: number };
+type Status = {
+  storage: 'redis' | 'memory';
+  redis: { present: boolean; connected: boolean; error?: string | null };
+  env: { url: boolean; token: boolean };
+  couponsCount?: number | null;
+};
+type Defaults = { defaultMinutes: number; defaultUses: number };
+type Stats = {
+  total: number;
+  byAge: Record<string, number>;
+  byGenre: Record<string, number>;
+  byLength: Record<string, number>;
+  byLevel: Record<string, number>;
+  byPeriod: Record<string, number>;
+};
+type DailyPoint = {
+  date: string; // YYYY-MM-DD (UTC)
+  total: number;
+  byAge: Record<string, number>;
+  byGenre: Record<string, number>;
+  byLength: Record<string, number>;
+  byLevel: Record<string, number>;
+  byPeriod: Record<string, number>;
+};
+type DailyResp = { days: number; points: DailyPoint[] };
 
-// --- Types ---
-type Defaults = {
-  defaultMinutes: number;
-  defaultUses: number;
+const AGE_KEYS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
+const GENRE_KEYS = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
+
+// Colors for stacked segments (keep it simple & readable)
+const AGE_COLORS: Record<string, string> = {
+  'Kids 7–10': 'bg-emerald-600',
+  'Tweens 11–13': 'bg-sky-600',
+  'Teens 14–17': 'bg-amber-600',
+  'Adults 18+': 'bg-fuchsia-600',
+};
+const GENRE_COLORS: Record<string, string> = {
+  'Comedy': 'bg-yellow-500',
+  'Drama': 'bg-red-600',
+  'Fantasy / Sci-Fi': 'bg-indigo-600',
+  'Classic (heightened)': 'bg-teal-600',
 };
 
-type Coupon = {
-  code: string;
-  minutes: number;
-  uses: number;
-  // optional fields your API might include:
-  remaining?: number;
-  expiresAt?: number;
-};
-
-type ApiResult<T> = { ok: boolean; error?: string } & T;
-
-// --- Helpers ---
-async function fetchJSON<T>(url: string, adminKey: string): Promise<T> {
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "content-type": "application/json",
-      "x-admin-key": adminKey || "",
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "");
-    throw new Error(msg || `Request failed ${res.status}`);
-  }
-  return res.json();
-}
-
-async function postJSON<T>(url: string, adminKey: string, body: any): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-admin-key": adminKey || "",
-    },
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "");
-    throw new Error(msg || `Request failed ${res.status}`);
-  }
-  return res.json();
-}
-
-async function del(url: string, adminKey: string): Promise<void> {
-  const res = await fetch(url, {
-    method: "DELETE",
-    headers: {
-      "x-admin-key": adminKey || "",
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "");
-    throw new Error(msg || `Request failed ${res.status}`);
-  }
-}
-
-// --- Component ---
 export default function AdminManagePage() {
-  const [adminKey, setAdminKey] = useState<string>("");
-  const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 0, defaultUses: 0 });
-  const [loading, setLoading] = useState<boolean>(true);
-  const [err, setErr] = useState<string>("");
+  const [key, setKey] = useState<string>('');
+  const [stored, setStored] = useState<string>('');
+  const [overrides, setOverrides] = useState<OverrideRow[]>([]);
+  const [coupons, setCoupons] = useState<CouponRow[]>([]);
+  const [form, setForm] = useState<CouponRow>({ code: '', minutes: 60, uses: 10 });
+  const [err, setErr] = useState<string>('');
+  const [status, setStatus] = useState<Status | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [debugDump, setDebugDump] = useState<any | null>(null);
+  const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [daily, setDaily] = useState<DailyResp | null>(null);
+  const [busyBtn, setBusyBtn] = useState<string>('');
+  const [grant, setGrant] = useState<{ ip: string; minutes: number; uses: number }>({ ip: '', minutes: 10080, uses: 100 });
 
-  // Coupon form
-  const [form, setForm] = useState<Coupon>({ code: "", minutes: 0, uses: 0 });
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
-  const hasKey = useMemo(() => (adminKey || "").trim().length > 0, [adminKey]);
+  // chart controls
+  const [dailyRange, setDailyRange] = useState<number>(30);
+  const [stackMode, setStackMode] = useState<'age'|'genre'>('age');
 
+  // bootstrap key
   useEffect(() => {
-    const stored = localStorage.getItem("adminKey") || "";
-    if (stored) setAdminKey(stored);
+    const k = localStorage.getItem('adminKey') || '';
+    setKey(k);
+    setStored(k);
+    if (k) refreshAll(k, dailyRange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!hasKey) {
-      setLoading(false);
-      return;
-    }
-    refreshAll(adminKey).catch((e) => setErr(e.message || "Failed to load admin data"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasKey]);
+  function signOut() {
+    localStorage.removeItem('adminKey');
+    setStored('');
+    setKey('');
+    setStatus(null);
+    setOverrides([]);
+    setCoupons([]);
+    setStats(null);
+    setDaily(null);
+  }
 
-  async function refreshAll(key: string) {
+  async function signIn() {
+    localStorage.setItem('adminKey', key);
+    setStored(key);
+    await refreshAll(key, dailyRange);
+  }
+
+  async function refreshAll(k: string, range: number) {
+    if (!k) return;
+    setErr('');
+    setLoading(true);
     try {
-      setLoading(true);
-      setErr("");
-      const d = await fetchJSON<ApiResult<Defaults & {}>>("/api/admin/settings", key);
-      if (!d.ok) throw new Error(d.error || "Failed to load defaults");
-      setDefaults({ defaultMinutes: d.defaultMinutes, defaultUses: d.defaultUses });
-
-      const list = await fetchJSON<ApiResult<{ coupons: Coupon[] }>>("/api/admin/coupons", key);
-      if (!list.ok) throw new Error(list.error || "Failed to load coupons");
-      setCoupons(list.coupons || []);
+      const [st, ov, cp, df, stt, dly] = await Promise.all([
+        fetch('/api/admin/diag', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/overrides', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/coupons', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/settings', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/stats', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch(`/api/admin/stats/daily?days=${range}`, { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+      ]);
+      if ([st, ov, cp, df, stt, dly].some(r => r.status === 401)) {
+        setErr('Unauthorized – check admin key.');
+        setOverrides([]); setCoupons([]); setStatus(null); setStats(null); setDaily(null);
+      } else {
+        const stj = await st.json();
+        const ovj = await ov.json();
+        const cpj = await cp.json();
+        const dfj = await df.json();
+        const sttj = await stt.json();
+        const dlj = await dly.json();
+        setStatus(stj || null);
+        setOverrides(ovj.overrides || []);
+        setCoupons(cpj.coupons || []);
+        if (dfj?.defaults) setDefaults(dfj.defaults);
+        if (sttj?.stats) setStats(sttj.stats);
+        if (dlj?.points) setDaily(dlj);
+        setForm(f => f.code ? f : { code: '', minutes: dfj?.defaults?.defaultMinutes ?? 60, uses: dfj?.defaults?.defaultUses ?? 10 });
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Network error');
     } finally {
       setLoading(false);
     }
   }
 
-  function saveKey() {
-    localStorage.setItem("adminKey", adminKey);
-    refreshAll(adminKey).catch((e) => setErr(e.message || "Failed to load admin data"));
+  async function debugCoupons() {
+    setBusyBtn('debug'); setDebugDump(null);
+    const res = await fetch('/api/admin/coupons/debug', { headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const j = await res.json().catch(()=>null);
+    setDebugDump(j);
+    setBusyBtn('');
   }
 
-  async function saveDefaults(e: React.FormEvent) {
-    e.preventDefault();
-    setErr("");
-    try {
-      const res = await postJSON<ApiResult<{}>>(
-        "/api/admin/settings",
-        adminKey,
-        {
-          defaultMinutes: Number(defaults.defaultMinutes) || 0,
-          defaultUses: Number(defaults.defaultUses) || 0,
-        }
-      );
-      if (!res.ok) throw new Error(res.error || "Failed to save defaults");
-      await refreshAll(adminKey);
-    } catch (e: any) {
-      setErr(e.message || "Failed to save defaults");
+  async function repairCoupons() {
+    setBusyBtn('repair'); setDebugDump(null);
+    const res = await fetch('/api/admin/coupons/repair', { method: 'POST', headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const j = await res.json().catch(()=>null);
+    setDebugDump(j);
+    setBusyBtn('');
+    await refreshAll(stored, dailyRange);
+  }
+
+  async function releaseIp(ip: string) {
+    setBusyBtn(`rel-${ip}`);
+    await fetch(`/api/admin/overrides?ip=${encodeURIComponent(ip)}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-key': stored },
+      cache: 'no-store',
+    });
+    setBusyBtn('');
+    refreshAll(stored, dailyRange);
+  }
+
+  async function grantIp() {
+    if (!grant.ip) { alert('Enter an IP'); return; }
+    setBusyBtn('grant');
+    const res = await fetch('/api/admin/overrides', {
+      method: 'POST',
+      headers: { 'x-admin-key': stored, 'content-type': 'application/json' },
+      body: JSON.stringify(grant),
+      cache: 'no-store',
+    });
+    setBusyBtn('');
+    if (!res.ok) {
+      const j = await res.json().catch(()=>({}));
+      alert(j?.error || 'Failed to grant.');
     }
+    await refreshAll(stored, dailyRange);
   }
 
-  function applyDefaultsToForm() {
-    setForm((f) => ({
-      ...f,
-      minutes: Number(defaults.defaultMinutes) || 0,
-      uses: Number(defaults.defaultUses) || 0,
-    }));
-  }
-
-  async function upsertCoupon(e: React.FormEvent) {
+  async function createOrUpdateCoupon(e: React.FormEvent) {
     e.preventDefault();
-    setErr("");
-    try {
-      if (!form.code.trim()) throw new Error("Coupon code is required.");
-      const res = await postJSON<ApiResult<{}>>(
-        "/api/admin/coupons",
-        adminKey,
-        {
-          code: form.code.trim(),
-          minutes: Number(form.minutes) || 0,
-          uses: Number(form.uses) || 0,
-        }
-      );
-      if (!res.ok) throw new Error(res.error || "Failed to upsert coupon");
-      setForm((f) => ({ ...f, code: f.code.trim() }));
-      await refreshAll(adminKey);
-    } catch (e: any) {
-      setErr(e.message || "Failed to upsert coupon");
+    setBusyBtn('saveCoupon');
+    const res = await fetch('/api/admin/coupons', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-admin-key': stored },
+      body: JSON.stringify(form),
+      cache: 'no-store',
+    });
+    setBusyBtn('');
+    if (res.ok) {
+      setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses });
+      await refreshAll(stored, dailyRange);
+    } else {
+      const j = await res.json().catch(() => ({}));
+      setErr(j?.error || 'Failed to save coupon');
     }
   }
 
   async function deleteCoupon(code: string) {
     if (!confirm(`Delete coupon "${code}"?`)) return;
-    setErr("");
-    try {
-      await del(`/api/admin/coupons?code=${encodeURIComponent(code)}`, adminKey);
-      await refreshAll(adminKey);
-    } catch (e: any) {
-      setErr(e.message || "Failed to delete coupon");
+    setBusyBtn(`del-${code}`);
+    await fetch(`/api/admin/coupons?code=${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-key': stored },
+      cache: 'no-store',
+    });
+    setBusyBtn('');
+    await refreshAll(stored, dailyRange);
+  }
+
+  async function saveDefaults(e: React.FormEvent) {
+    e.preventDefault();
+    setBusyBtn('saveDefaults');
+    const res = await fetch('/api/admin/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-admin-key': stored },
+      body: JSON.stringify(defaults),
+      cache: 'no-store',
+    });
+    const j = await res.json().catch(()=>({}));
+    setBusyBtn('');
+    if (res.ok && j?.defaults) {
+      setDefaults(j.defaults);
+      setForm(f => f.code ? f : { code: '', minutes: j.defaults.defaultMinutes, uses: j.defaults.defaultUses });
+    } else {
+      alert(j?.error || 'Failed to save defaults');
     }
   }
 
-  return (
-    <main style={{ maxWidth: 900, margin: "24px auto", padding: "0 16px" }}>
-      <h1>Admin</h1>
+  function editCoupon(c: CouponRow) {
+    setForm({ code: c.code, minutes: c.minutes, uses: c.uses });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
-      {/* Admin key */}
-      <section style={{ margin: "16px 0", padding: 12, border: "1px solid #ddd" }}>
-        <h2>Authentication</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="password"
-            placeholder="Enter admin key"
-            value={adminKey}
-            onChange={(e) => setAdminKey(e.target.value)}
-            style={{ minWidth: 280, padding: 6 }}
-          />
-          <button onClick={saveKey}>Save key</button>
-          {hasKey ? <span style={{ color: "green" }}>Key set</span> : <span>Enter your admin key</span>}
+  async function downloadCsv(url: string, filename: string) {
+    const res = await fetch(url, { headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // UI bits
+  function Card(props: { title: string; children: any; right?: any }) {
+    return (
+      <section className="bg-white rounded-xl border shadow-sm p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">{props.title}</h2>
+          {props.right}
         </div>
+        {props.children}
       </section>
+    );
+  }
+
+  function Btn({ children, onClick, kind='default', id, type }:{
+    children: any; onClick?: ()=>void; kind?: 'default'|'primary'|'danger'|'ghost'; id?: string; type?: 'button'|'submit';
+  }) {
+    const base = 'inline-flex items-center h-9 px-3 rounded-lg border text-sm transition active:scale-[.98]';
+    const cls =
+      kind === 'primary' ? `${base} bg-black text-white border-black hover:bg-neutral-800`
+      : kind === 'danger' ? `${base} bg-red-600 text-white border-red-600 hover:bg-red-700`
+      : kind === 'ghost' ? `${base} bg-transparent hover:bg-neutral-50`
+      : `${base} bg-white hover:bg-neutral-50`;
+    const spinning = busyBtn === id;
+    return (
+      <button type={type || 'button'} onClick={onClick} className={`${cls} ${spinning ? 'opacity-60 cursor-wait' : ''}`} disabled={spinning}>
+        {spinning ? 'Working…' : children}
+      </button>
+    );
+  }
+
+  // --- Stacked chart ---
+  function Legend({ items, colors }:{ items: string[]; colors: Record<string,string> }) {
+    return (
+      <div className="flex flex-wrap gap-3 text-xs">
+        {items.map(k => (
+          <div key={k} className="flex items-center gap-1">
+            <span className={`inline-block w-3 h-3 rounded ${colors[k] || 'bg-neutral-400'}`} />
+            <span>{k}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function StackedChart({
+    points, keys, colors,
+  }:{
+    points: DailyPoint[]; keys: string[]; colors: Record<string,string>;
+  }) {
+    const max = useMemo(()=> Math.max(1, ...points.map(p=>p.total)), [points]);
+    return (
+      <div className="flex items-end gap-1 h-40">
+        {points.map(p => {
+          // base bar height (proportional to day's total)
+          const barPct = (p.total / max) * 100;
+          const barStyles = { height: `${barPct}%` };
+
+        // compute segments by key
+          const segs = keys.map(k => {
+            const scope = stackMode === 'age' ? p.byAge : p.byGenre;
+            const value = scope?.[k] || 0;
+            const frac = p.total > 0 ? value / p.total : 0;
+            return { key: k, pct: frac * 100, value };
+          }).filter(s => s.value > 0);
+
+          return (
+            <div key={p.date} className="flex-1 flex items-end">
+              <div className="w-full rounded-t overflow-hidden" style={barStyles} title={`${p.date}: ${p.total}`}>
+                {/* segment stack (top-to-bottom) */}
+                <div className="w-full h-full flex flex-col-reverse">
+                  {segs.map(s => (
+                    <div
+                      key={s.key}
+                      className={`${colors[s.key] || 'bg-neutral-400'}`}
+                      style={{ height: `${s.pct}%` }}
+                      title={`${p.date} • ${s.key}: ${s.value}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Sign-in gate
+  if (!stored) {
+    return (
+      <div className="min-h-screen grid place-items-center p-6">
+        <div className="w-full max-w-md bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <h1 className="text-xl font-semibold">Admin Sign-in</h1>
+          <label className="grid gap-1 text-sm">
+            <span>Admin key</span>
+            <input type="password" className="h-10 px-3 rounded-lg border" value={key} onChange={e=>setKey(e.target.value)} />
+          </label>
+          <div className="flex gap-2">
+            <Btn onClick={signIn} kind="primary">Sign in</Btn>
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin Tools</h1>
+        <Btn onClick={signOut}>Sign out</Btn>
+      </div>
+
+      {/* Status */}
+      <Card
+        title="Status"
+        right={
+          <div className="flex items-center gap-2">
+            <select
+              className="h-9 px-2 rounded-lg border text-sm"
+              value={dailyRange}
+              onChange={e => { const v = Number(e.target.value); setDailyRange(v); refreshAll(stored, v); }}
+            >
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+            </select>
+            <Btn onClick={()=>refreshAll(stored, dailyRange)} id="refresh">{loading ? 'Refreshing…' : 'Refresh'}</Btn>
+          </div>
+        }
+      >
+        {!status && <p className="text-sm text-neutral-600">—</p>}
+        {status && (
+          <div className="font-mono text-sm">
+            <div>Storage: <span className="font-semibold">{status.storage}</span></div>
+            <div>ENV URL: {status.env.url ? 'set' : 'missing'} | ENV TOKEN: {status.env.token ? 'set' : 'missing'}</div>
+            <div>Redis Connected: {status.redis.connected ? 'yes' : (status.redis.present ? 'no' : 'n/a')}</div>
+            {typeof status.couponsCount === 'number' && (
+              <div>Coupon keys: {status.couponsCount}</div>
+            )}
+          </div>
+        )}
+        <div className="mt-3 flex gap-2 flex-wrap">
+          <Btn onClick={debugCoupons} id="debug">Debug: Log coupon keys</Btn>
+          <Btn onClick={repairCoupons} id="repair">Repair coupon keys</Btn>
+          <Btn onClick={()=>downloadCsv('/api/admin/export/coupons', 'coupons.csv')}>Download coupons CSV</Btn>
+          <Btn onClick={()=>downloadCsv('/api/admin/export/stats', 'stats_daily.csv')}>Download stats CSV</Btn>
+        </div>
+        {debugDump && (
+          <pre className="mt-3 text-xs bg-neutral-50 border rounded-lg p-3 max-h-80 overflow-auto">
+            {JSON.stringify(debugDump, null, 2)}
+          </pre>
+        )}
+      </Card>
 
       {/* Global Visitor Allowance */}
-      <section style={{ margin: "16px 0", padding: 12, border: "1px solid #ddd" }}>
-        <h2>Global Visitor Allowance</h2>
-        <form onSubmit={saveDefaults} noValidate>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <label htmlFor="default-mins" style={{ minWidth: 140 }}>Default minutes</label>
-            <input
-              id="default-mins"
-              type="number"
-              min={0}
-              value={defaults.defaultMinutes}
-              onChange={(e) => setDefaults((d) => ({ ...d, defaultMinutes: Number(e.target.value) }))}
-              style={{ width: 120, padding: 6 }}
-            />
-            <label htmlFor="default-uses" style={{ minWidth: 100 }}>Default uses</label>
-            <input
-              id="default-uses"
-              type="number"
-              min={0}
-              value={defaults.defaultUses}
-              onChange={(e) => setDefaults((d) => ({ ...d, defaultUses: Number(e.target.value) }))}
-              style={{ width: 120, padding: 6 }}
-            />
-            <button type="submit">Save defaults</button>
-            <button type="button" onClick={applyDefaultsToForm}>Use defaults in form</button>
-            {/* NOTE: intentionally removed the “Apply defaults to ‘chickenpotpie’” button */}
-          </div>
+      <Card title="Global Visitor Allowance">
+        <form onSubmit={saveDefaults} className="flex items-center gap-3 flex-wrap">
+          <label htmlFor="default-mins" className="text-sm">Default minutes</label>
+          <input
+            id="default-mins"
+            name="defaultMinutes"
+            type="number"
+            value={defaults.defaultMinutes}
+            onChange={(e) => setDefaults({ ...defaults, defaultMinutes: Number(e.target.value) })}
+            className="h-9 px-3 rounded-lg border w-40"
+            inputMode="numeric"
+          />
+          <label htmlFor="default-uses" className="text-sm">Default uses</label>
+          <input
+            id="default-uses"
+            name="defaultUses"
+            type="number"
+            value={defaults.defaultUses}
+            onChange={(e) => setDefaults({ ...defaults, defaultUses: Number(e.target.value) })}
+            className="h-9 px-3 rounded-lg border w-36"
+            inputMode="numeric"
+          />
+          <Btn kind="primary" id="saveDefaults" type="submit">Save defaults</Btn>
+          <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Use defaults in form</Btn>
+          {/* Removed: Apply defaults to “chickenpotpie” */}
         </form>
-        <p style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
-          New visitors automatically receive this allowance (number of uses within the given minutes, per IP).
-          You can still use the form below to create or edit specific coupons as needed.
-        </p>
-      </section>
+      </Card>
 
-      {/* Create / update a coupon */}
-      <section style={{ margin: "16px 0", padding: 12, border: "1px solid #ddd" }}>
-        <h2>Create / Update Coupon</h2>
-        <form onSubmit={upsertCoupon} noValidate>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <label htmlFor="code" style={{ minWidth: 60 }}>Code</label>
-            <input
-              id="code"
-              type="text"
-              value={form.code}
-              onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-              style={{ width: 160, padding: 6 }}
-            />
-            <label htmlFor="minutes" style={{ minWidth: 70 }}>Minutes</label>
-            <input
-              id="minutes"
-              type="number"
-              min={0}
-              value={form.minutes}
-              onChange={(e) => setForm((f) => ({ ...f, minutes: Number(e.target.value) }))}
-              style={{ width: 120, padding: 6 }}
-            />
-            <label htmlFor="uses" style={{ minWidth: 50 }}>Uses</label>
-            <input
-              id="uses"
-              type="number"
-              min={0}
-              value={form.uses}
-              onChange={(e) => setForm((f) => ({ ...f, uses: Number(e.target.value) }))}
-              style={{ width: 120, padding: 6 }}
-            />
-            <button type="submit">Save coupon</button>
-          </div>
+      {/* Create / Edit Coupon */}
+      <Card title="Create / Edit Coupon">
+        <form onSubmit={createOrUpdateCoupon} className="flex items-center gap-3 flex-wrap">
+          <label htmlFor="coupon-code" className="text-sm">Code</label>
+          <input
+            id="coupon-code"
+            name="code"
+            placeholder="code (e.g., chickenpotpie)"
+            value={form.code}
+            onChange={(e) => setForm({ ...form, code: e.target.value })}
+            required
+            className="h-9 px-3 rounded-lg border w-60"
+            autoComplete="off"
+          />
+          <label htmlFor="coupon-minutes" className="text-sm">Minutes</label>
+          <input
+            id="coupon-minutes"
+            name="minutes"
+            type="number"
+            placeholder="minutes"
+            value={form.minutes}
+            onChange={(e) => setForm({ ...form, minutes: Number(e.target.value) })}
+            required
+            className="h-9 px-3 rounded-lg border w-36"
+            inputMode="numeric"
+          />
+          <label htmlFor="coupon-uses" className="text-sm">Uses</label>
+          <input
+            id="coupon-uses"
+            name="uses"
+            type="number"
+            placeholder="uses"
+            value={form.uses}
+            onChange={(e) => setForm({ ...form, uses: Number(e.target.value) })}
+            required
+            className="h-9 px-3 rounded-lg border w-32"
+            inputMode="numeric"
+          />
+          <Btn kind="primary" id="saveCoupon" type="submit">{form.code ? 'Save Coupon' : 'Create Coupon'}</Btn>
+          {form.code && <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Clear</Btn>}
         </form>
-      </section>
 
-      {/* Coupon list */}
-      <section style={{ margin: "16px 0", padding: 12, border: "1px solid #ddd" }}>
-        <h2>Coupons</h2>
-        {loading ? (
-          <p>Loading…</p>
-        ) : coupons.length === 0 ? (
-          <p>No coupons found.</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <h3 className="mt-4 font-semibold">Existing Coupons</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
             <thead>
-              <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 6 }}>Code</th>
-                <th style={{ textAlign: "right", borderBottom: "1px solid #ddd", padding: 6 }}>Minutes</th>
-                <th style={{ textAlign: "right", borderBottom: "1px solid #ddd", padding: 6 }}>Uses</th>
-                <th style={{ textAlign: "right", borderBottom: "1px solid #ddd", padding: 6 }}>Remaining</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 6 }}>Expires</th>
-                <th style={{ borderBottom: "1px solid #ddd", padding: 6 }} />
+              <tr className="text-left text-neutral-600">
+                <th className="py-1 pr-2">Code</th>
+                <th className="py-1 text-right">Minutes</th>
+                <th className="py-1 text-right">Uses</th>
+                <th className="py-1 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {coupons.map((c) => (
-                <tr key={c.code}>
-                  <td style={{ padding: 6 }}>{c.code}</td>
-                  <td style={{ padding: 6, textAlign: "right" }}>{c.minutes}</td>
-                  <td style={{ padding: 6, textAlign: "right" }}>{c.uses}</td>
-                  <td style={{ padding: 6, textAlign: "right" }}>
-                    {typeof c.remaining === "number" ? c.remaining : "—"}
-                  </td>
-                  <td style={{ padding: 6 }}>
-                    {c.expiresAt ? new Date(c.expiresAt).toLocaleString() : "—"}
-                  </td>
-                  <td style={{ padding: 6, textAlign: "right" }}>
-                    <button onClick={() => deleteCoupon(c.code)}>Delete</button>
+                <tr key={c.code} className="border-t">
+                  <td className="py-1 pr-2"><code>{c.code}</code></td>
+                  <td className="py-1 text-right tabular-nums">{c.minutes}</td>
+                  <td className="py-1 text-right tabular-nums">{c.uses}</td>
+                  <td className="py-1 text-right">
+                    <Btn onClick={() => editCoupon(c)} id={`edit-${c.code}`}>Edit</Btn>
+                    <span className="inline-block w-2" />
+                    <Btn onClick={() => deleteCoupon(c.code)} kind="danger" id={`del-${c.code}`}>Delete</Btn>
                   </td>
                 </tr>
               ))}
+              {!coupons.length && (
+                <tr><td colSpan={4} className="py-2 text-neutral-500">No coupons yet</td></tr>
+              )}
             </tbody>
           </table>
-        )}
-      </section>
+        </div>
+      </Card>
 
-      {err ? (
-        <p style={{ color: "crimson", marginTop: 8 }}>
-          {String(err)}
-        </p>
-      ) : null}
-    </main>
+      {/* Overrides */}
+      <Card title="Overrides">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-neutral-600">
+                  <th className="py-1 pr-2">IP</th>
+                  <th className="py-1 text-right">Remaining</th>
+                  <th className="py-1 text-right">Expires (sec)</th>
+                  <th className="py-1 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overrides.map((o) => (
+                  <tr key={o.ip} className="border-t">
+                    <td className="py-1 pr-2">{o.ip}</td>
+                    <td className="py-1 text-right tabular-nums">{o.remaining}</td>
+                    <td className="py-1 text-right tabular-nums">{o.expiresInSeconds}</td>
+                    <td className="py-1 text-right">
+                      <Btn onClick={() => releaseIp(o.ip)} id={`rel-${o.ip}`}>Release</Btn>
+                    </td>
+                  </tr>
+                ))}
+                {!overrides.length && (
+                  <tr><td colSpan={4} className="py-2 text-neutral-500">No active overrides</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Grant form */}
+          <div>
+            <h3 className="font-semibold mb-2">Grant override to IP</h3>
+            <div className="grid gap-2">
+              <label className="grid text-sm gap-1">
+                <span>IP (v4)</span>
+                <input className="h-9 px-3 rounded-lg border" value={grant.ip} onChange={e=>setGrant({...grant, ip: e.target.value})} placeholder="e.g. 203.0.113.42" />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid text-sm gap-1">
+                  <span>Minutes</span>
+                  <input className="h-9 px-3 rounded-lg border" type="number" value={grant.minutes} onChange={e=>setGrant({...grant, minutes: Number(e.target.value)})} />
+                </label>
+                <label className="grid text-sm gap-1">
+                  <span>Uses</span>
+                  <input className="h-9 px-3 rounded-lg border" type="number" value={grant.uses} onChange={e=>setGrant({...grant, uses: Number(e.target.value)})} />
+                </label>
+              </div>
+              <div>
+                <Btn onClick={grantIp} id="grant" kind="primary">Grant override</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Stats */}
+      <Card
+        title="Usage Stats"
+        right={
+          <div className="flex items-center gap-2">
+            <select
+              className="h-9 px-2 rounded-lg border text-sm"
+              value={stackMode}
+              onChange={e => setStackMode(e.target.value as 'age'|'genre')}
+              title="Stacked chart mode"
+            >
+              <option value="age">Stack: Age</option>
+              <option value="genre">Stack: Genre</option>
+            </select>
+            <Btn onClick={() => refreshAll(stored, dailyRange)}>Refresh</Btn>
+          </div>
+        }
+      >
+        {!stats && <p className="text-sm text-neutral-600">No stats yet.</p>}
+        {stats && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-2">
+              <div className="rounded-lg border p-3">
+                <div className="text-xs text-neutral-600">Total generations</div>
+                <div className="text-2xl font-semibold tabular-nums">{stats.total}</div>
+              </div>
+            </div>
+
+            {daily?.points?.length ? (
+              <div className="mt-4">
+                <div className="mb-2">
+                  {stackMode === 'age'
+                    ? <Legend items={[...AGE_KEYS]} colors={AGE_COLORS} />
+                    : <Legend items={[...GENRE_KEYS]} colors={GENRE_COLORS} />
+                  }
+                </div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <StackedChart
+                      points={daily.points}
+                      keys={stackMode === 'age' ? [...AGE_KEYS] : [...GENRE_KEYS]}
+                      colors={stackMode === 'age' ? AGE_COLORS : GENRE_COLORS}
+                    />
+                  </div>
+                  <div className="w-24 text-right text-xs text-neutral-600">
+                    Last {daily.days} days
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid md:grid-cols-2 gap-6 mt-6">
+              <Facet title="By Age (all-time)" data={stats.byAge} />
+              <Facet title="By Genre (all-time)" data={stats.byGenre} />
+              <Facet title="By Length (all-time)" data={stats.byLength} />
+              <Facet title="By Level (all-time)" data={stats.byLevel} />
+              <Facet title="By Period (all-time)" data={stats.byPeriod} />
+            </div>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function Facet({ title, data }:{ title: string; data: Record<string, number> }) {
+  const entries = Object.entries(data || {}).sort((a,b)=>b[1]-a[1]);
+  if (!entries.length) return null;
+  return (
+    <div>
+      <h4 className="font-medium mt-4 mb-2">{title}</h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-neutral-600">
+              <th className="py-1 pr-2">Value</th>
+              <th className="py-1 text-right">Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([k,v])=>(
+              <tr key={k} className="border-t">
+                <td className="py-1 pr-2">{k}</td>
+                <td className="py-1 text-right tabular-nums">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
