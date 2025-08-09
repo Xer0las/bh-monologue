@@ -18,7 +18,33 @@ type Stats = {
   byLevel: Record<string, number>;
   byPeriod: Record<string, number>;
 };
-type Daily = { days: number; points: { date: string; total: number }[] };
+type DailyPoint = {
+  date: string; // YYYY-MM-DD (UTC)
+  total: number;
+  byAge: Record<string, number>;
+  byGenre: Record<string, number>;
+  byLength: Record<string, number>;
+  byLevel: Record<string, number>;
+  byPeriod: Record<string, number>;
+};
+type DailyResp = { days: number; points: DailyPoint[] };
+
+const AGE_KEYS = ['Kids 7–10','Tweens 11–13','Teens 14–17','Adults 18+'] as const;
+const GENRE_KEYS = ['Comedy','Drama','Fantasy / Sci-Fi','Classic (heightened)'] as const;
+
+// Colors for stacked segments (keep it simple & readable)
+const AGE_COLORS: Record<string, string> = {
+  'Kids 7–10': 'bg-emerald-600',
+  'Tweens 11–13': 'bg-sky-600',
+  'Teens 14–17': 'bg-amber-600',
+  'Adults 18+': 'bg-fuchsia-600',
+};
+const GENRE_COLORS: Record<string, string> = {
+  'Comedy': 'bg-yellow-500',
+  'Drama': 'bg-red-600',
+  'Fantasy / Sci-Fi': 'bg-indigo-600',
+  'Classic (heightened)': 'bg-teal-600',
+};
 
 export default function AdminManagePage() {
   const [key, setKey] = useState<string>('');
@@ -32,16 +58,21 @@ export default function AdminManagePage() {
   const [debugDump, setDebugDump] = useState<any | null>(null);
   const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
   const [stats, setStats] = useState<Stats | null>(null);
-  const [daily, setDaily] = useState<Daily | null>(null);
+  const [daily, setDaily] = useState<DailyResp | null>(null);
   const [busyBtn, setBusyBtn] = useState<string>('');
   const [grant, setGrant] = useState<{ ip: string; minutes: number; uses: number }>({ ip: '', minutes: 10080, uses: 100 });
+
+  // chart controls
+  const [dailyRange, setDailyRange] = useState<number>(30);
+  const [stackMode, setStackMode] = useState<'age'|'genre'>('age');
 
   // bootstrap key
   useEffect(() => {
     const k = localStorage.getItem('adminKey') || '';
     setKey(k);
     setStored(k);
-    if (k) refreshAll(k);
+    if (k) refreshAll(k, dailyRange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function signOut() {
@@ -58,10 +89,10 @@ export default function AdminManagePage() {
   async function signIn() {
     localStorage.setItem('adminKey', key);
     setStored(key);
-    await refreshAll(key);
+    await refreshAll(key, dailyRange);
   }
 
-  async function refreshAll(k: string) {
+  async function refreshAll(k: string, range: number) {
     if (!k) return;
     setErr('');
     setLoading(true);
@@ -72,7 +103,7 @@ export default function AdminManagePage() {
         fetch('/api/admin/coupons', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/settings', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/stats', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
-        fetch('/api/admin/stats/daily?days=30', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch(`/api/admin/stats/daily?days=${range}`, { headers: { 'x-admin-key': k }, cache: 'no-store' }),
       ]);
       if ([st, ov, cp, df, stt, dly].some(r => r.status === 401)) {
         setErr('Unauthorized – check admin key.');
@@ -113,7 +144,7 @@ export default function AdminManagePage() {
     const j = await res.json().catch(()=>null);
     setDebugDump(j);
     setBusyBtn('');
-    await refreshAll(stored);
+    await refreshAll(stored, dailyRange);
   }
 
   async function releaseIp(ip: string) {
@@ -124,7 +155,7 @@ export default function AdminManagePage() {
       cache: 'no-store',
     });
     setBusyBtn('');
-    refreshAll(stored);
+    refreshAll(stored, dailyRange);
   }
 
   async function grantIp() {
@@ -141,7 +172,7 @@ export default function AdminManagePage() {
       const j = await res.json().catch(()=>({}));
       alert(j?.error || 'Failed to grant.');
     }
-    await refreshAll(stored);
+    await refreshAll(stored, dailyRange);
   }
 
   async function createOrUpdateCoupon(e: React.FormEvent) {
@@ -156,7 +187,7 @@ export default function AdminManagePage() {
     setBusyBtn('');
     if (res.ok) {
       setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses });
-      await refreshAll(stored);
+      await refreshAll(stored, dailyRange);
     } else {
       const j = await res.json().catch(() => ({}));
       setErr(j?.error || 'Failed to save coupon');
@@ -172,7 +203,7 @@ export default function AdminManagePage() {
       cache: 'no-store',
     });
     setBusyBtn('');
-    await refreshAll(stored);
+    await refreshAll(stored, dailyRange);
   }
 
   async function saveDefaults(e: React.FormEvent) {
@@ -197,22 +228,6 @@ export default function AdminManagePage() {
   function editCoupon(c: CouponRow) {
     setForm({ code: c.code, minutes: c.minutes, uses: c.uses });
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function applyDefaultsToForm() {
-    setForm(f => ({ code: f.code, minutes: defaults.defaultMinutes, uses: defaults.defaultUses }));
-  }
-
-  async function applyDefaultsToCode(code: string) {
-    setBusyBtn(`apply-${code}`);
-    const res = await fetch('/api/admin/coupons', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-admin-key': stored },
-      body: JSON.stringify({ code, minutes: defaults.defaultMinutes, uses: defaults.defaultUses }),
-      cache: 'no-store',
-    });
-    setBusyBtn('');
-    if (res.ok) await refreshAll(stored);
   }
 
   async function downloadCsv(url: string, filename: string) {
@@ -257,15 +272,59 @@ export default function AdminManagePage() {
     );
   }
 
-  function BarChart({ points }:{ points: { date: string; total: number }[] }) {
-    const max = useMemo(()=> Math.max(1, ...points.map(p=>p.total)), [points]);
+  // --- Stacked chart ---
+  function Legend({ items, colors }:{ items: string[]; colors: Record<string,string> }) {
     return (
-      <div className="flex items-end gap-1 h-36">
-        {points.map(p=>(
-          <div key={p.date} className="flex-1">
-            <div className="bg-black/80 rounded-t" style={{ height: `${(p.total / max) * 100}%` }} title={`${p.date}: ${p.total}`} />
+      <div className="flex flex-wrap gap-3 text-xs">
+        {items.map(k => (
+          <div key={k} className="flex items-center gap-1">
+            <span className={`inline-block w-3 h-3 rounded ${colors[k] || 'bg-neutral-400'}`} />
+            <span>{k}</span>
           </div>
         ))}
+      </div>
+    );
+  }
+
+  function StackedChart({
+    points, keys, colors,
+  }:{
+    points: DailyPoint[]; keys: string[]; colors: Record<string,string>;
+  }) {
+    const max = useMemo(()=> Math.max(1, ...points.map(p=>p.total)), [points]);
+    return (
+      <div className="flex items-end gap-1 h-40">
+        {points.map(p => {
+          // base bar height (proportional to day's total)
+          const barPct = (p.total / max) * 100;
+          const barStyles = { height: `${barPct}%` };
+
+          // compute segments by key
+          const segs = keys.map(k => {
+            const scope = stackMode === 'age' ? p.byAge : p.byGenre;
+            const value = scope?.[k] || 0;
+            const frac = p.total > 0 ? value / p.total : 0;
+            return { key: k, pct: frac * 100, value };
+          }).filter(s => s.value > 0);
+
+          return (
+            <div key={p.date} className="flex-1 flex items-end">
+              <div className="w-full rounded-t overflow-hidden" style={barStyles} title={`${p.date}: ${p.total}`}>
+                {/* segment stack (top-to-bottom) */}
+                <div className="w-full h-full flex flex-col-reverse">
+                  {segs.map(s => (
+                    <div
+                      key={s.key}
+                      className={`${colors[s.key] || 'bg-neutral-400'}`}
+                      style={{ height: `${s.pct}%` }}
+                      title={`${p.date} • ${s.key}: ${s.value}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -297,7 +356,23 @@ export default function AdminManagePage() {
       </div>
 
       {/* Status */}
-      <Card title="Status" right={<Btn onClick={()=>refreshAll(stored)} id="refresh">{loading ? 'Refreshing…' : 'Refresh'}</Btn>}>
+      <Card
+        title="Status"
+        right={
+          <div className="flex items-center gap-2">
+            <select
+              className="h-9 px-2 rounded-lg border text-sm"
+              value={dailyRange}
+              onChange={e => { const v = Number(e.target.value); setDailyRange(v); refreshAll(stored, v); }}
+            >
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+            </select>
+            <Btn onClick={()=>refreshAll(stored, dailyRange)} id="refresh">{loading ? 'Refreshing…' : 'Refresh'}</Btn>
+          </div>
+        }
+      >
         {!status && <p className="text-sm text-neutral-600">—</p>}
         {status && (
           <div className="font-mono text-sm">
@@ -483,7 +558,23 @@ export default function AdminManagePage() {
       </Card>
 
       {/* Stats */}
-      <Card title="Usage Stats" right={<Btn onClick={() => refreshAll(stored)}>Refresh</Btn>}>
+      <Card
+        title="Usage Stats"
+        right={
+          <div className="flex items-center gap-2">
+            <select
+              className="h-9 px-2 rounded-lg border text-sm"
+              value={stackMode}
+              onChange={e => setStackMode(e.target.value as 'age'|'genre')}
+              title="Stacked chart mode"
+            >
+              <option value="age">Stack: Age</option>
+              <option value="genre">Stack: Genre</option>
+            </select>
+            <Btn onClick={() => refreshAll(stored, dailyRange)}>Refresh</Btn>
+          </div>
+        }
+      >
         {!stats && <p className="text-sm text-neutral-600">No stats yet.</p>}
         {stats && (
           <>
@@ -495,27 +586,34 @@ export default function AdminManagePage() {
             </div>
 
             {daily?.points?.length ? (
-              <div className="mt-3">
+              <div className="mt-4">
+                <div className="mb-2">
+                  {stackMode === 'age'
+                    ? <Legend items={[...AGE_KEYS]} colors={AGE_COLORS} />
+                    : <Legend items={[...GENRE_KEYS]} colors={GENRE_COLORS} />
+                  }
+                </div>
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
-                    <BarChart points={daily.points} />
+                    <StackedChart
+                      points={daily.points}
+                      keys={stackMode === 'age' ? [...AGE_KEYS] : [...GENRE_KEYS]}
+                      colors={stackMode === 'age' ? AGE_COLORS : GENRE_COLORS}
+                    />
                   </div>
                   <div className="w-24 text-right text-xs text-neutral-600">
                     Last {daily.days} days
                   </div>
                 </div>
-                <div className="mt-1 text-xs text-neutral-600">
-                  Peak: {Math.max(...daily.points.map(p=>p.total))} / day
-                </div>
               </div>
             ) : null}
 
-            <div className="grid md:grid-cols-2 gap-6">
-              <Facet title="By Age" data={stats.byAge} />
-              <Facet title="By Genre" data={stats.byGenre} />
-              <Facet title="By Length" data={stats.byLength} />
-              <Facet title="By Level" data={stats.byLevel} />
-              <Facet title="By Period" data={stats.byPeriod} />
+            <div className="grid md:grid-cols-2 gap-6 mt-6">
+              <Facet title="By Age (all-time)" data={stats.byAge} />
+              <Facet title="By Genre (all-time)" data={stats.byGenre} />
+              <Facet title="By Length (all-time)" data={stats.byLength} />
+              <Facet title="By Level (all-time)" data={stats.byLevel} />
+              <Facet title="By Period (all-time)" data={stats.byPeriod} />
             </div>
           </>
         )}
