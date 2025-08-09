@@ -42,16 +42,15 @@ export async function POST(req: Request) {
       period = "Contemporary",
     } = await req.json().catch(() => ({}));
 
-    // NOTE: make TS happy in all Next versions by awaiting headers()
     const h = await headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = hasOverride(ip);
+    // NOTE: await here
+    const override = await hasOverride(ip);
     if (!override) {
-      // Burst quota: 10 per 5 minutes, shared across endpoints
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
       if (!dq.allowed) {
         const msg =
@@ -62,7 +61,6 @@ export async function POST(req: Request) {
         );
       }
 
-      // Per-minute guardrail
       const rl = take(`gen:${ip}`, { windowMs: 60_000, max: 8 });
       if (!rl.allowed) {
         return NextResponse.json(
@@ -71,7 +69,8 @@ export async function POST(req: Request) {
         );
       }
     } else {
-      consumeOverride(ip); // consume one use if finite
+      // and await here
+      await consumeOverride(ip);
       console.log(`[override] monologue bypass ip=${ip}`);
     }
 
@@ -110,7 +109,6 @@ export async function POST(req: Request) {
     const text = extractText(resp);
     if (!text) throw new Error("No text returned from model.");
 
-    // Record stats (best effort)
     await recordGeneration({ age, genre, length, level, period }).catch(() => {});
 
     const [first, ...rest] = text.split("\n").filter(Boolean);
