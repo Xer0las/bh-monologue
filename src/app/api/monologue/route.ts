@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import OpenAI from "openai";
 import { take } from "@/lib/ratelimit";
-import { hasOverride, consumeOverride } from "@/lib/overrides";
+import { getDefaults } from "@/lib/settings";
+import { hasOverride, grantOverride, consumeOverride } from "@/lib/overrides";
 import { recordGeneration } from "@/lib/metrics";
 
 export const runtime = "nodejs";
@@ -48,9 +49,20 @@ export async function POST(req: Request) {
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    // NOTE: await here
-    const override = await hasOverride(ip);
-    if (!override) {
+    // ---- Global Visitor Allowance (baseline) ------------------------------
+    // If this IP doesn't have an override yet, grant the current defaults.
+    let has = await hasOverride(ip);
+    if (!has) {
+      const d = await getDefaults();
+      if (d?.defaultMinutes && d?.defaultUses) {
+        await grantOverride(ip, d.defaultMinutes, d.defaultUses);
+        has = await hasOverride(ip);
+      }
+    }
+    // ----------------------------------------------------------------------
+
+    if (!has) {
+      // Normal burst/daily rate limits (unchanged)
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
       if (!dq.allowed) {
         const msg =
@@ -69,7 +81,6 @@ export async function POST(req: Request) {
         );
       }
     } else {
-      // and await here
       await consumeOverride(ip);
       console.log(`[override] monologue bypass ip=${ip}`);
     }
