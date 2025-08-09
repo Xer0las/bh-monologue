@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import OpenAI from "openai";
 import { take } from "@/lib/ratelimit";
 import { hasOverride, consumeOverride } from "@/lib/overrides";
+import { recordGeneration } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -41,13 +42,13 @@ export async function POST(req: Request) {
       period = "Contemporary",
     } = await req.json().catch(() => ({}));
 
-    const h = await headers();
+    const h = headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = await hasOverride(ip);
+    const override = hasOverride(ip);
     if (!override) {
       // Burst quota: 10 per 5 minutes, shared across endpoints
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
@@ -69,7 +70,7 @@ export async function POST(req: Request) {
         );
       }
     } else {
-      await consumeOverride(ip); // consume one use if finite
+      consumeOverride(ip); // consume one use if finite
       console.log(`[override] monologue bypass ip=${ip}`);
     }
 
@@ -107,6 +108,9 @@ export async function POST(req: Request) {
 
     const text = extractText(resp);
     if (!text) throw new Error("No text returned from model.");
+
+    // Record stats (best effort)
+    await recordGeneration({ age, genre, length, level, period }).catch(() => {});
 
     const [first, ...rest] = text.split("\n").filter(Boolean);
     const title = first.replace(/^[-#\s]*/, "").slice(0, 120) || "Monologue";
