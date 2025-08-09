@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { headers } from "next/headers";
 import { take } from "@/lib/ratelimit";
 import { hasOverride, consumeOverride } from "@/lib/overrides";
+import { recordGeneration } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 
@@ -24,13 +25,13 @@ export async function GET(req: Request) {
     const level = url.searchParams.get("level") || "Beginner";
     const period = url.searchParams.get("period") || "Contemporary";
 
-    const h = await headers(); // <-- important
+    const h = headers();
     const ip =
       h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       h.get("cf-connecting-ip") ||
       "unknown";
 
-    const override = await hasOverride(ip);
+    const override = hasOverride(ip);
     if (!override) {
       // Burst quota: 10 per 5 minutes (shared)
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
@@ -61,7 +62,7 @@ export async function GET(req: Request) {
         );
       }
     } else {
-      await consumeOverride(ip);
+      consumeOverride(ip);
       console.log(`[override] stream bypass ip=${ip}`);
     }
 
@@ -88,6 +89,9 @@ export async function GET(req: Request) {
       `Line 1: a short evocative TITLE\n` +
       `Blank line\n` +
       `Then the monologue text.`;
+
+    // Record stats (best effort)
+    recordGeneration({ age, genre, length, level, period }).catch(() => {});
 
     // Stream plain text back
     const encoder = new TextEncoder();
