@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type OverrideRow = { ip: string; remaining: number; expiresInSeconds: number };
 type CouponRow = { code: string; minutes: number; uses: number };
@@ -18,6 +18,7 @@ type Stats = {
   byLevel: Record<string, number>;
   byPeriod: Record<string, number>;
 };
+type Daily = { days: number; points: { date: string; total: number }[] };
 
 export default function AdminManagePage() {
   const [key, setKey] = useState<string>('');
@@ -31,8 +32,11 @@ export default function AdminManagePage() {
   const [debugDump, setDebugDump] = useState<any | null>(null);
   const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
   const [stats, setStats] = useState<Stats | null>(null);
+  const [daily, setDaily] = useState<Daily | null>(null);
   const [busyBtn, setBusyBtn] = useState<string>('');
+  const [grant, setGrant] = useState<{ ip: string; minutes: number; uses: number }>({ ip: '', minutes: 10080, uses: 100 });
 
+  // bootstrap key
   useEffect(() => {
     const k = localStorage.getItem('adminKey') || '';
     setKey(k);
@@ -40,37 +44,52 @@ export default function AdminManagePage() {
     if (k) refreshAll(k);
   }, []);
 
-  function saveKey() {
+  function signOut() {
+    localStorage.removeItem('adminKey');
+    setStored('');
+    setKey('');
+    setStatus(null);
+    setOverrides([]);
+    setCoupons([]);
+    setStats(null);
+    setDaily(null);
+  }
+
+  async function signIn() {
     localStorage.setItem('adminKey', key);
     setStored(key);
-    refreshAll(key);
+    await refreshAll(key);
   }
 
   async function refreshAll(k: string) {
+    if (!k) return;
     setErr('');
     setLoading(true);
     try {
-      const [st, ov, cp, df, stt] = await Promise.all([
+      const [st, ov, cp, df, stt, dly] = await Promise.all([
         fetch('/api/admin/diag', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/overrides', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/coupons', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/settings', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
         fetch('/api/admin/stats', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
+        fetch('/api/admin/stats/daily?days=30', { headers: { 'x-admin-key': k }, cache: 'no-store' }),
       ]);
-      if ([st, ov, cp, df, stt].some(r => r.status === 401)) {
+      if ([st, ov, cp, df, stt, dly].some(r => r.status === 401)) {
         setErr('Unauthorized – check admin key.');
-        setOverrides([]); setCoupons([]); setStatus(null); setStats(null);
+        setOverrides([]); setCoupons([]); setStatus(null); setStats(null); setDaily(null);
       } else {
         const stj = await st.json();
         const ovj = await ov.json();
         const cpj = await cp.json();
         const dfj = await df.json();
         const sttj = await stt.json();
+        const dlj = await dly.json();
         setStatus(stj || null);
         setOverrides(ovj.overrides || []);
         setCoupons(cpj.coupons || []);
         if (dfj?.defaults) setDefaults(dfj.defaults);
         if (sttj?.stats) setStats(sttj.stats);
+        if (dlj?.points) setDaily(dlj);
         setForm(f => f.code ? f : { code: '', minutes: dfj?.defaults?.defaultMinutes ?? 60, uses: dfj?.defaults?.defaultUses ?? 10 });
       }
     } catch (e: any) {
@@ -108,6 +127,23 @@ export default function AdminManagePage() {
     refreshAll(stored);
   }
 
+  async function grantIp() {
+    if (!grant.ip) { alert('Enter an IP'); return; }
+    setBusyBtn('grant');
+    const res = await fetch('/api/admin/overrides', {
+      method: 'POST',
+      headers: { 'x-admin-key': stored, 'content-type': 'application/json' },
+      body: JSON.stringify(grant),
+      cache: 'no-store',
+    });
+    setBusyBtn('');
+    if (!res.ok) {
+      const j = await res.json().catch(()=>({}));
+      alert(j?.error || 'Failed to grant.');
+    }
+    await refreshAll(stored);
+  }
+
   async function createOrUpdateCoupon(e: React.FormEvent) {
     e.preventDefault();
     setBusyBtn('saveCoupon');
@@ -117,12 +153,12 @@ export default function AdminManagePage() {
       body: JSON.stringify(form),
       cache: 'no-store',
     });
-    const j = await res.json().catch(() => ({}));
     setBusyBtn('');
     if (res.ok) {
       setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses });
       await refreshAll(stored);
     } else {
+      const j = await res.json().catch(() => ({}));
       setErr(j?.error || 'Failed to save coupon');
     }
   }
@@ -179,17 +215,33 @@ export default function AdminManagePage() {
     if (res.ok) await refreshAll(stored);
   }
 
-  function Card(props: { title: string; children: any }) {
+  async function downloadCsv(url: string, filename: string) {
+    const res = await fetch(url, { headers: { 'x-admin-key': stored }, cache: 'no-store' });
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // UI bits
+  function Card(props: { title: string; children: any; right?: any }) {
     return (
       <section className="bg-white rounded-xl border shadow-sm p-5">
-        <h2 className="text-lg font-semibold mb-3">{props.title}</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">{props.title}</h2>
+          {props.right}
+        </div>
         {props.children}
       </section>
     );
   }
 
-  function Btn({ children, onClick, kind='default', id }:{
-    children: any; onClick?: ()=>void; kind?: 'default'|'primary'|'danger'|'ghost'; id?: string;
+  function Btn({ children, onClick, kind='default', id, type }:{
+    children: any; onClick?: ()=>void; kind?: 'default'|'primary'|'danger'|'ghost'; id?: string; type?: 'button'|'submit';
   }) {
     const base = 'inline-flex items-center h-9 px-3 rounded-lg border text-sm transition active:scale-[.98]';
     const cls =
@@ -199,35 +251,39 @@ export default function AdminManagePage() {
       : `${base} bg-white hover:bg-neutral-50`;
     const spinning = busyBtn === id;
     return (
-      <button onClick={onClick} className={`${cls} ${spinning ? 'opacity-60 cursor-wait' : ''}`} disabled={spinning}>
+      <button type={type || 'button'} onClick={onClick} className={`${cls} ${spinning ? 'opacity-60 cursor-wait' : ''}`} disabled={spinning}>
         {spinning ? 'Working…' : children}
       </button>
     );
   }
 
-  function StatTable({ title, data }:{ title: string; data: Record<string, number> }) {
-    const entries = Object.entries(data || {}).sort((a,b)=>b[1]-a[1]);
-    if (!entries.length) return null;
+  function BarChart({ points }:{ points: { date: string; total: number }[] }) {
+    const max = useMemo(()=> Math.max(1, ...points.map(p=>p.total)), [points]);
     return (
-      <div>
-        <h4 className="font-medium mt-4 mb-2">{title}</h4>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-neutral-600">
-                <th className="py-1 pr-2">Value</th>
-                <th className="py-1 text-right">Count</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map(([k,v])=>(
-                <tr key={k} className="border-t">
-                  <td className="py-1 pr-2">{k}</td>
-                  <td className="py-1 text-right tabular-nums">{v}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="flex items-end gap-1 h-36">
+        {points.map(p=>(
+          <div key={p.date} className="flex-1">
+            <div className="bg-black/80 rounded-t" style={{ height: `${(p.total / max) * 100}%` }} title={`${p.date}: ${p.total}`} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Sign-in gate
+  if (!stored) {
+    return (
+      <div className="min-h-screen grid place-items-center p-6">
+        <div className="w-full max-w-md bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <h1 className="text-xl font-semibold">Admin Sign-in</h1>
+          <label className="grid gap-1 text-sm">
+            <span>Admin key</span>
+            <input type="password" className="h-10 px-3 rounded-lg border" value={key} onChange={e=>setKey(e.target.value)} />
+          </label>
+          <div className="flex gap-2">
+            <Btn onClick={signIn} kind="primary">Sign in</Btn>
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
         </div>
       </div>
     );
@@ -235,29 +291,13 @@ export default function AdminManagePage() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Admin Tools</h1>
-
-      {/* Admin Key */}
-      <Card title="Admin Key">
-        <div className="flex items-center gap-3 flex-wrap">
-          <label htmlFor="admin-key" className="text-sm">Key</label>
-          <input
-            id="admin-key"
-            name="adminKey"
-            type="password"
-            placeholder="Enter admin key"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            autoComplete="off"
-            className="h-9 px-3 rounded-lg border w-80"
-          />
-          <Btn onClick={saveKey} kind="primary">Use Key</Btn>
-          {err && <p className="text-sm text-red-600">{err}</p>}
-        </div>
-      </Card>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin Tools</h1>
+        <Btn onClick={signOut}>Sign out</Btn>
+      </div>
 
       {/* Status */}
-      <Card title="Status">
+      <Card title="Status" right={<Btn onClick={()=>refreshAll(stored)} id="refresh">{loading ? 'Refreshing…' : 'Refresh'}</Btn>}>
         {!status && <p className="text-sm text-neutral-600">—</p>}
         {status && (
           <div className="font-mono text-sm">
@@ -270,9 +310,10 @@ export default function AdminManagePage() {
           </div>
         )}
         <div className="mt-3 flex gap-2 flex-wrap">
-          <Btn onClick={() => refreshAll(stored)} id="refresh">Refresh</Btn>
           <Btn onClick={debugCoupons} id="debug">Debug: Log coupon keys</Btn>
           <Btn onClick={repairCoupons} id="repair">Repair coupon keys</Btn>
+          <Btn onClick={()=>downloadCsv('/api/admin/export/coupons', 'coupons.csv')}>Download coupons CSV</Btn>
+          <Btn onClick={()=>downloadCsv('/api/admin/export/stats', 'stats_daily.csv')}>Download stats CSV</Btn>
         </div>
         {debugDump && (
           <pre className="mt-3 text-xs bg-neutral-50 border rounded-lg p-3 max-h-80 overflow-auto">
@@ -304,14 +345,10 @@ export default function AdminManagePage() {
             className="h-9 px-3 rounded-lg border w-36"
             inputMode="numeric"
           />
-          <Btn kind="primary" id="saveDefaults">Save defaults</Btn>
-          <Btn onClick={applyDefaultsToForm}>Use defaults in form</Btn>
+          <Btn kind="primary" id="saveDefaults" type="submit">Save defaults</Btn>
+          <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Use defaults in form</Btn>
           <Btn onClick={() => applyDefaultsToCode('chickenpotpie')} id="apply-chicken">Apply defaults to “chickenpotpie”</Btn>
         </form>
-        <p className="text-xs text-neutral-600 mt-2">
-          These values are used as the starting values when creating coupons. You can also apply them to the
-          “chickenpotpie” code with one click.
-        </p>
       </Card>
 
       {/* Create / Edit Coupon */}
@@ -352,7 +389,7 @@ export default function AdminManagePage() {
             className="h-9 px-3 rounded-lg border w-32"
             inputMode="numeric"
           />
-          <Btn kind="primary" id="saveCoupon">{form.code ? 'Save Coupon' : 'Create Coupon'}</Btn>
+          <Btn kind="primary" id="saveCoupon" type="submit">{form.code ? 'Save Coupon' : 'Create Coupon'}</Btn>
           {form.code && <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Clear</Btn>}
         </form>
 
@@ -390,37 +427,63 @@ export default function AdminManagePage() {
 
       {/* Overrides */}
       <Card title="Overrides">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-neutral-600">
-                <th className="py-1 pr-2">IP</th>
-                <th className="py-1 text-right">Remaining</th>
-                <th className="py-1 text-right">Expires (sec)</th>
-                <th className="py-1 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {overrides.map((o) => (
-                <tr key={o.ip} className="border-t">
-                  <td className="py-1 pr-2">{o.ip}</td>
-                  <td className="py-1 text-right tabular-nums">{o.remaining}</td>
-                  <td className="py-1 text-right tabular-nums">{o.expiresInSeconds}</td>
-                  <td className="py-1 text-right">
-                    <Btn onClick={() => releaseIp(o.ip)} id={`rel-${o.ip}`}>Release</Btn>
-                  </td>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-neutral-600">
+                  <th className="py-1 pr-2">IP</th>
+                  <th className="py-1 text-right">Remaining</th>
+                  <th className="py-1 text-right">Expires (sec)</th>
+                  <th className="py-1 text-right">Actions</th>
                 </tr>
-              ))}
-              {!overrides.length && (
-                <tr><td colSpan={4} className="py-2 text-neutral-500">No active overrides</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {overrides.map((o) => (
+                  <tr key={o.ip} className="border-t">
+                    <td className="py-1 pr-2">{o.ip}</td>
+                    <td className="py-1 text-right tabular-nums">{o.remaining}</td>
+                    <td className="py-1 text-right tabular-nums">{o.expiresInSeconds}</td>
+                    <td className="py-1 text-right">
+                      <Btn onClick={() => releaseIp(o.ip)} id={`rel-${o.ip}`}>Release</Btn>
+                    </td>
+                  </tr>
+                ))}
+                {!overrides.length && (
+                  <tr><td colSpan={4} className="py-2 text-neutral-500">No active overrides</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Grant form */}
+          <div>
+            <h3 className="font-semibold mb-2">Grant override to IP</h3>
+            <div className="grid gap-2">
+              <label className="grid text-sm gap-1">
+                <span>IP (v4)</span>
+                <input className="h-9 px-3 rounded-lg border" value={grant.ip} onChange={e=>setGrant({...grant, ip: e.target.value})} placeholder="e.g. 203.0.113.42" />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid text-sm gap-1">
+                  <span>Minutes</span>
+                  <input className="h-9 px-3 rounded-lg border" type="number" value={grant.minutes} onChange={e=>setGrant({...grant, minutes: Number(e.target.value)})} />
+                </label>
+                <label className="grid text-sm gap-1">
+                  <span>Uses</span>
+                  <input className="h-9 px-3 rounded-lg border" type="number" value={grant.uses} onChange={e=>setGrant({...grant, uses: Number(e.target.value)})} />
+                </label>
+              </div>
+              <div>
+                <Btn onClick={grantIp} id="grant" kind="primary">Grant override</Btn>
+              </div>
+            </div>
+          </div>
         </div>
       </Card>
 
       {/* Stats */}
-      <Card title="Usage Stats">
+      <Card title="Usage Stats" right={<Btn onClick={() => refreshAll(stored)}>Refresh</Btn>}>
         {!stats && <p className="text-sm text-neutral-600">No stats yet.</p>}
         {stats && (
           <>
@@ -430,19 +493,61 @@ export default function AdminManagePage() {
                 <div className="text-2xl font-semibold tabular-nums">{stats.total}</div>
               </div>
             </div>
+
+            {daily?.points?.length ? (
+              <div className="mt-3">
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <BarChart points={daily.points} />
+                  </div>
+                  <div className="w-24 text-right text-xs text-neutral-600">
+                    Last {daily.days} days
+                  </div>
+                </div>
+                <div className="mt-1 text-xs text-neutral-600">
+                  Peak: {Math.max(...daily.points.map(p=>p.total))} / day
+                </div>
+              </div>
+            ) : null}
+
             <div className="grid md:grid-cols-2 gap-6">
-              <StatTable title="By Age" data={stats.byAge} />
-              <StatTable title="By Genre" data={stats.byGenre} />
-              <StatTable title="By Length" data={stats.byLength} />
-              <StatTable title="By Level" data={stats.byLevel} />
-              <StatTable title="By Period" data={stats.byPeriod} />
+              <Facet title="By Age" data={stats.byAge} />
+              <Facet title="By Genre" data={stats.byGenre} />
+              <Facet title="By Length" data={stats.byLength} />
+              <Facet title="By Level" data={stats.byLevel} />
+              <Facet title="By Period" data={stats.byPeriod} />
             </div>
           </>
         )}
-        <div className="mt-3">
-          <Btn onClick={() => refreshAll(stored)}>Refresh stats</Btn>
-        </div>
       </Card>
+    </div>
+  );
+}
+
+function Facet({ title, data }:{ title: string; data: Record<string, number> }) {
+  const entries = Object.entries(data || {}).sort((a,b)=>b[1]-a[1]);
+  if (!entries.length) return null;
+  return (
+    <div>
+      <h4 className="font-medium mt-4 mb-2">{title}</h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-neutral-600">
+              <th className="py-1 pr-2">Value</th>
+              <th className="py-1 text-right">Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([k,v])=>(
+              <tr key={k} className="border-t">
+                <td className="py-1 pr-2">{k}</td>
+                <td className="py-1 text-right tabular-nums">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
