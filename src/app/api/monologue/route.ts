@@ -62,7 +62,7 @@ export async function POST(req: Request) {
     // ----------------------------------------------------------------------
 
     if (!has) {
-      // Normal burst/daily rate limits (unchanged)
+      // Normal burst/minute rate limits (unchanged)
       const dq = take(`burst:${ip}`, { windowMs: 300_000, max: 10 });
       if (!dq.allowed) {
         const msg =
