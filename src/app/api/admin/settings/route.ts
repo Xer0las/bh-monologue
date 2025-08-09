@@ -5,11 +5,18 @@ import { getDefaults, setDefaults } from "@/lib/settings";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const defaults = await getDefaults();
-  return NextResponse.json(
-    { ok: true, defaults },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  try {
+    const defaults = await getDefaults();
+    return NextResponse.json(
+      { ok: true, defaults },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (err: any) {
+    return NextResponse.json(
+      { ok: false, error: err?.message || "Failed to load defaults" },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(req: Request) {
@@ -19,18 +26,18 @@ export async function POST(req: Request) {
       defaultUses?: unknown;
     };
 
-    const defaultMinutes = Number(body.defaultMinutes);
-    const defaultUses = Number(body.defaultUses);
+    const minutes = Number(body.defaultMinutes);
+    const uses = Number(body.defaultUses);
 
-    if (!Number.isFinite(defaultMinutes) || !Number.isFinite(defaultUses)) {
+    if (!Number.isFinite(minutes) || !Number.isFinite(uses)) {
       return NextResponse.json(
         { error: "defaultMinutes and defaultUses are required" },
         { status: 400 }
       );
     }
 
-    // Pass a single argument object (matches your setDefaults signature)
-    await setDefaults({ minutes: defaultMinutes, uses: defaultUses });
+    // IMPORTANT: use the exact property names your settings lib expects
+    await setDefaults({ defaultMinutes: minutes, defaultUses: uses });
 
     const defaults = await getDefaults();
     return NextResponse.json(
@@ -38,6 +45,9 @@ export async function POST(req: Request) {
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err?.message ?? "Server error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: err?.message || "Failed to save defaults" },
+      { status: 500 }
+    );
   }
 }
