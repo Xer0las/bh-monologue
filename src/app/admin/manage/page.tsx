@@ -56,7 +56,13 @@ export default function AdminManagePage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(false);
   const [debugDump, setDebugDump] = useState<any | null>(null);
+
+  // Saved (authoritative) defaults from the server
   const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
+  // NEW: draft strings to prevent field blurring while typing
+  const [draftMins, setDraftMins] = useState<string>('10080');
+  const [draftUses, setDraftUses] = useState<string>('100');
+
   const [stats, setStats] = useState<Stats | null>(null);
   const [daily, setDaily] = useState<DailyResp | null>(null);
   const [busyBtn, setBusyBtn] = useState<string>('');
@@ -118,10 +124,19 @@ export default function AdminManagePage() {
         setStatus(stj || null);
         setOverrides(ovj.overrides || []);
         setCoupons(cpj.coupons || []);
-        if (dfj?.defaults) setDefaults(dfj.defaults);
+        if (dfj?.defaults) {
+          setDefaults(dfj.defaults);
+          // keep drafts in sync with saved values
+          setDraftMins(String(dfj.defaults.defaultMinutes ?? ''));
+          setDraftUses(String(dfj.defaults.defaultUses ?? ''));
+        }
         if (sttj?.stats) setStats(sttj.stats);
         if (dlj?.points) setDaily(dlj);
-        setForm(f => f.code ? f : { code: '', minutes: dfj?.defaults?.defaultMinutes ?? 60, uses: dfj?.defaults?.defaultUses ?? 10 });
+        setForm(f => f.code ? f : {
+          code: '',
+          minutes: dfj?.defaults?.defaultMinutes ?? 60,
+          uses: dfj?.defaults?.defaultUses ?? 10
+        });
       }
     } catch (e: any) {
       setErr(e?.message || 'Network error');
@@ -206,19 +221,37 @@ export default function AdminManagePage() {
     await refreshAll(stored, dailyRange);
   }
 
+  // SAVE DEFAULTS:
+  // - Use the *draft* strings so typing doesn't blur.
+  // - Parse to integers right before sending to the API.
   async function saveDefaults(e: React.FormEvent) {
     e.preventDefault();
     setBusyBtn('saveDefaults');
+
+    const minutes = parseInt(draftMins, 10);
+    const uses = parseInt(draftUses, 10);
+    if (!Number.isFinite(minutes) || minutes < 0 || !Number.isFinite(uses) || uses < 0) {
+      setBusyBtn('');
+      alert('Please enter valid non-negative numbers for minutes and uses.');
+      return;
+    }
+
     const res = await fetch('/api/admin/settings', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-admin-key': stored },
-      body: JSON.stringify(defaults),
+      body: JSON.stringify({ defaultMinutes: minutes, defaultUses: uses }),
       cache: 'no-store',
     });
+
     const j = await res.json().catch(()=>({}));
     setBusyBtn('');
+
     if (res.ok && j?.defaults) {
+      // reflect what the server saved
       setDefaults(j.defaults);
+      setDraftMins(String(j.defaults.defaultMinutes));
+      setDraftUses(String(j.defaults.defaultUses));
+      // optionally refresh other sections that rely on defaults
       setForm(f => f.code ? f : { code: '', minutes: j.defaults.defaultMinutes, uses: j.defaults.defaultUses });
     } else {
       alert(j?.error || 'Failed to save defaults');
@@ -299,7 +332,7 @@ export default function AdminManagePage() {
           const barPct = (p.total / max) * 100;
           const barStyles = { height: `${barPct}%` };
 
-        // compute segments by key
+          // compute segments by key
           const segs = keys.map(k => {
             const scope = stackMode === 'age' ? p.byAge : p.byGenre;
             const value = scope?.[k] || 0;
@@ -405,8 +438,8 @@ export default function AdminManagePage() {
             id="default-mins"
             name="defaultMinutes"
             type="number"
-            value={defaults.defaultMinutes}
-            onChange={(e) => setDefaults({ ...defaults, defaultMinutes: Number(e.target.value) })}
+            value={draftMins}
+            onChange={(e) => setDraftMins(e.target.value)}
             className="h-9 px-3 rounded-lg border w-40"
             inputMode="numeric"
           />
@@ -415,8 +448,8 @@ export default function AdminManagePage() {
             id="default-uses"
             name="defaultUses"
             type="number"
-            value={defaults.defaultUses}
-            onChange={(e) => setDefaults({ ...defaults, defaultUses: Number(e.target.value) })}
+            value={draftUses}
+            onChange={(e) => setDraftUses(e.target.value)}
             className="h-9 px-3 rounded-lg border w-36"
             inputMode="numeric"
           />
