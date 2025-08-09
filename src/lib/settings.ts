@@ -1,19 +1,29 @@
 // src/lib/settings.ts
 //
-// Global, app-wide default generation settings (no coupon dependency).
-// Uses Upstash Redis if available; otherwise falls back to an in-memory singleton
-// so the app still runs locally. In-memory fallback will reset on server restart.
+// Stores GLOBAL defaults for the whole app, including the visitor allowance
+// (defaultMinutes/defaultUses) and optional content/model defaults.
+// Persists to Upstash Redis when available; otherwise uses in‑memory fallback.
 
 type DefaultSettings = {
-  age: string;
-  genre: string;
-  length: string;
-  level: string;
-  period: string;
-  model?: string; // keep optional so older callers don’t break
+  // Global Visitor Allowance (used by API routes for baseline per‑IP quota)
+  defaultMinutes: number; // window length, minutes
+  defaultUses: number;    // max uses within that window
+
+  // Optional content/model defaults (kept to avoid breaking other code)
+  age?: string;
+  genre?: string;
+  length?: string;
+  level?: string;
+  period?: string;
+  model?: string;
 };
 
 const DEFAULTS: DefaultSettings = {
+  // sensible baseline that you can edit from /admin
+  defaultMinutes: 15,
+  defaultUses: 3,
+
+  // optional content defaults (safe fallbacks)
   age: "Teens 14–17",
   genre: "Comedy",
   length: "Medium (45–60s)",
@@ -24,7 +34,7 @@ const DEFAULTS: DefaultSettings = {
 
 const KEY = "bh:monologues:global-defaults:v1";
 
-// --- Minimal Redis client (Upstash REST) – optional ---
+// ---- Upstash Redis helpers (optional) ----
 async function redisGet<T>(key: string): Promise<T | null> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -35,8 +45,7 @@ async function redisGet<T>(key: string): Promise<T | null> {
     cache: "no-store",
   });
   if (!resp.ok) return null;
-  const data = await resp.json().catch(() => null) as any;
-  // Upstash returns { result: "string or null" }
+  const data = (await resp.json().catch(() => null)) as any;
   if (!data || typeof data.result === "undefined" || data.result === null) return null;
   try {
     return JSON.parse(data.result) as T;
@@ -59,58 +68,55 @@ async function redisSet<T>(key: string, value: T): Promise<void> {
   }).catch(() => {});
 }
 
-// --- In-memory fallback (resets on cold start) ---
+// ---- In-memory fallback (resets on cold start) ----
 const mem: { defaults?: DefaultSettings } =
   (globalThis as any).__BH_SETTINGS__ ?? ((globalThis as any).__BH_SETTINGS__ = {});
 
-// --- Public API ---
+// ---- Public API ----
 
-/**
- * Returns the global default generation settings for ALL visitors.
- * Order of precedence:
- *   1) persisted value in Redis (if configured)
- *   2) in-memory value set during this process lifetime
- *   3) built-in DEFAULTS above
- */
+/** Return the global defaults merged over built-ins. */
 export async function getDefaults(): Promise<DefaultSettings> {
-  // 1) Redis
+  // Try Redis
   const fromRedis = await redisGet<DefaultSettings>(KEY);
   if (fromRedis && typeof fromRedis === "object") {
-    return { ...DEFAULTS, ...fromRedis };
+    return normalize({ ...DEFAULTS, ...fromRedis });
   }
-
-  // 2) memory
+  // Try memory
   if (mem.defaults) {
-    return { ...DEFAULTS, ...mem.defaults };
+    return normalize({ ...DEFAULTS, ...mem.defaults });
   }
-
-  // 3) built-in
-  return { ...DEFAULTS };
+  // Built-ins
+  return normalize({ ...DEFAULTS });
 }
 
-/**
- * Overwrites the global defaults for everyone. Persists to Redis when available
- * and also updates in-memory so the new value is visible immediately.
- */
+/** Update one or more global defaults. */
 export async function setDefaults(next: Partial<DefaultSettings>): Promise<DefaultSettings> {
   const current = await getDefaults();
-  const merged: DefaultSettings = {
+  const merged = normalize({
     ...current,
-    ...Object.fromEntries(
-      Object.entries(next).filter(([_, v]) => typeof v !== "undefined")
-    ),
-  };
-
+    ...next,
+  });
   mem.defaults = merged;
   await redisSet(KEY, merged).catch(() => {});
   return merged;
 }
 
-/**
- * Resets global defaults back to the built-in values.
- */
+/** Reset to built-in defaults. */
 export async function resetDefaults(): Promise<DefaultSettings> {
-  mem.defaults = { ...DEFAULTS };
-  await redisSet(KEY, mem.defaults).catch(() => {});
-  return mem.defaults;
+  const reset = normalize({ ...DEFAULTS });
+  mem.defaults = reset;
+  await redisSet(KEY, reset).catch(() => {});
+  return reset;
+}
+
+// ---- Utilities ----
+function normalize(v: DefaultSettings): DefaultSettings {
+  // Coerce numeric fields safely
+  const mins = Number(v.defaultMinutes);
+  const uses = Number(v.defaultUses);
+  return {
+    ...v,
+    defaultMinutes: Number.isFinite(mins) && mins >= 0 ? mins : DEFAULTS.defaultMinutes,
+    defaultUses: Number.isFinite(uses) && uses >= 0 ? uses : DEFAULTS.defaultUses,
+  };
 }
