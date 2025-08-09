@@ -7,15 +7,16 @@ export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
   const ip = ipFromHeaders(req.headers) || 'unknown';
-  const ov = await getOverride(ip);
-  if (!ov) {
+  const o = await getOverride(ip);
+  if (!o) {
     return NextResponse.json({ unlocked: false }, { headers: { 'Cache-Control': 'no-store' } });
   }
+  const secondsLeft = Math.max(0, Math.ceil(o.expiresInMs / 1000));
   return NextResponse.json(
     {
-      unlocked: true,
-      remaining: ov.remaining,
-      secondsLeft: Math.max(0, Math.ceil(ov.expiresInMs / 1000)),
+      unlocked: o.remaining > 0 && secondsLeft > 0,
+      remaining: o.remaining,
+      secondsLeft,
     },
     { headers: { 'Cache-Control': 'no-store' } }
   );
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
   if (!code || !String(code).trim()) {
     return NextResponse.json({ error: 'Missing code' }, { status: 400 });
   }
+
   const tpl = await getCouponTemplate(String(code).trim().toLowerCase());
   if (!tpl) {
     return NextResponse.json({ error: 'Invalid or expired code' }, { status: 400 });
