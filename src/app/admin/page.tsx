@@ -1,105 +1,202 @@
 'use client';
-import React, { useEffect, useState } from 'react';
 
-type Stats = {
-  ok: boolean;
-  startedAt: string;
-  uptimeSec: number;
-  counts: { pageview: number; generate_clicked: number };
-  recent: Array<{ ts: string; event: string; ip: string; data?: Record<string, unknown> }>;
+import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
+
+type Defaults = {
+  defaultMinutes: number;
+  defaultUses: number;
+};
+
+type AdminInfo = {
+  pageviews: number;
+  generations: number;
+  uptime: string;
+  now: string;
 };
 
 export default function AdminPage() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  async function loadStats() {
+  const [defaults, setDefaults] = useState<Defaults>({
+    defaultMinutes: 15,
+    defaultUses: 3,
+  });
+
+  // Optional: simple counters/uptime if your API provides these elsewhere later.
+  const [info, setInfo] = useState<AdminInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
     setLoading(true);
-    setErr(null);
+    setError(null);
     try {
-      const res = await fetch('/api/metrics?stats=1', { cache: 'no-store' });
-      const json = (await res.json()) as Stats;
-      setStats(json);
+      // Get current global defaults
+      const r = await fetch('/api/admin/settings', { cache: 'no-store' });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error || `Settings load failed (${r.status})`);
+      }
+      const j = await r.json();
+      if (j?.defaults) {
+        setDefaults({
+          defaultMinutes: Number(j.defaults.defaultMinutes ?? 15),
+          defaultUses: Number(j.defaults.defaultUses ?? 3),
+        });
+      }
+
+      // If you later expose metrics, load them here. For now just fake uptime since boot.
+      setInfo((prev) => prev ?? null);
     } catch (e: any) {
-      setErr(e?.message || 'Failed to load');
+      setError(e?.message || 'Failed to load admin data.');
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    loadStats();
-    const id = setInterval(loadStats, 10_000); // refresh every 10s
-    return () => clearInterval(id);
   }, []);
 
-  const since = stats?.startedAt
-    ? new Date(stats.startedAt).toLocaleString()
-    : '—';
-  const uptime = stats ? fmtDuration(stats.uptimeSec) : '—';
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSavedMsg(null);
+    try {
+      const r = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({
+          defaultMinutes: Number(defaults.defaultMinutes),
+          defaultUses: Number(defaults.defaultUses),
+        }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error || `Save failed (${r.status})`);
+      }
+      const j = await r.json();
+      if (j?.defaults) {
+        setDefaults({
+          defaultMinutes: Number(j.defaults.defaultMinutes ?? defaults.defaultMinutes),
+          defaultUses: Number(j.defaults.defaultUses ?? defaults.defaultUses),
+        });
+      }
+      setSavedMsg('Saved.');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save defaults.');
+    } finally {
+      setSaving(false);
+      // Hide “Saved.” after a moment
+      setTimeout(() => setSavedMsg(null), 2000);
+    }
+  }
+
+  function setNumber<K extends keyof Defaults>(key: K, value: string) {
+    // guard NaN; keep empty string to allow typing
+    const n = value.trim() === '' ? NaN : Number(value);
+    setDefaults((d) => ({
+      ...d,
+      [key]: Number.isFinite(n) ? n : (value.trim() === '' ? ('' as unknown as number) : d[key]),
+    }));
+  }
 
   return (
-    <main className="min-h-screen max-w-5xl mx-auto p-6">
-      <header className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Admin · BH Monologues</h1>
-        <div className="flex gap-2">
-          <a href="/" className="h-10 px-3 rounded-lg border flex items-center">← Back</a>
-          <button onClick={loadStats} className="h-10 px-3 rounded-lg border" disabled={loading}>
-            {loading ? 'Refreshing…' : 'Refresh'}
+    <main className="mx-auto max-w-5xl px-4 py-8">
+      <div className="mb-6 flex items-center gap-4">
+        <h1 className="text-3xl font-semibold">Admin · BH Monologues</h1>
+        <div className="ml-auto flex items-center gap-2">
+          <Link
+            href="/"
+            className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
+          >
+            ← Back
+          </Link>
+          <button
+            onClick={load}
+            className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
+          >
+            Refresh
           </button>
         </div>
-      </header>
+      </div>
 
-      {err && <p className="mt-3 text-sm text-red-600">Error: {err}</p>}
-
-      <section className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <StatCard label="Pageviews (since boot)" value={stats?.counts.pageview ?? 0} />
-        <StatCard label="Generates (since boot)" value={stats?.counts.generate_clicked ?? 0} />
-        <StatCard label="Uptime" value={uptime} sub={since} />
+      {/* Cards row (pageviews/generates/uptime). If you don’t have data yet, these show zeros.) */}
+      <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded border p-4">
+          <div className="text-sm text-gray-500">PAGEVIEWS (SINCE BOOT)</div>
+          <div className="mt-2 text-3xl font-bold">{info?.pageviews ?? 0}</div>
+        </div>
+        <div className="rounded border p-4">
+          <div className="text-sm text-gray-500">GENERATES (SINCE BOOT)</div>
+          <div className="mt-2 text-3xl font-bold">{info?.generations ?? 0}</div>
+        </div>
+        <div className="rounded border p-4">
+          <div className="text-sm text-gray-500">UPTIME</div>
+          <div className="mt-2 text-3xl font-bold">{info?.uptime ?? '—'}</div>
+          <div className="text-xs text-gray-500">{info?.now ?? ''}</div>
+        </div>
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-lg font-semibold">Recent Events</h2>
-        {!stats?.recent?.length && <p className="text-sm text-neutral-600 mt-1">No events yet.</p>}
-        <ul className="mt-3 grid gap-2">
-          {stats?.recent?.map((r, i) => (
-            <li key={i} className="border rounded-lg p-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{r.event}</span>
-                <span className="text-neutral-600">· {new Date(r.ts).toLocaleString()}</span>
-                <span className="text-neutral-600">· {r.ip || 'ip?'} </span>
-              </div>
-              {r.data && (
-                <pre className="mt-1 text-xs whitespace-pre-wrap">
-{JSON.stringify(r.data, null, 2)}
-                </pre>
-              )}
-            </li>
-          ))}
-        </ul>
+      {/* Global Defaults */}
+      <section className="rounded border p-4">
+        <h2 className="mb-3 text-xl font-semibold">Global Defaults</h2>
+        <p className="mb-4 text-sm text-gray-600">
+          These defaults control the global generation limits for anyone using the app.
+          They are <strong>not</strong> tied to coupons.
+        </p>
+
+        <form onSubmit={onSave} className="flex flex-col gap-4 max-w-md">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-gray-700">Default minutes (window)</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={Number.isFinite(defaults.defaultMinutes) ? String(defaults.defaultMinutes) : ''}
+              onChange={(e) => setNumber('defaultMinutes', e.target.value)}
+              className="w-48 rounded border px-2 py-1"
+              placeholder="e.g., 15"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-gray-700">Default uses (max)</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={Number.isFinite(defaults.defaultUses) ? String(defaults.defaultUses) : ''}
+              onChange={(e) => setNumber('defaultUses', e.target.value)}
+              className="w-48 rounded border px-2 py-1"
+              placeholder="e.g., 3"
+            />
+          </label>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded bg-black px-3 py-1 text-white disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save defaults'}
+            </button>
+            {loading && <span className="text-sm text-gray-500">Loading…</span>}
+            {savedMsg && <span className="text-sm text-green-700">{savedMsg}</span>}
+            {error && <span className="text-sm text-red-700">{error}</span>}
+          </div>
+        </form>
+      </section>
+
+      {/* Recent events placeholder, to be wired later */}
+      <section className="mt-10">
+        <h3 className="mb-2 text-lg font-medium">Recent Events</h3>
+        <div className="rounded border p-4 text-sm text-gray-600">No events yet.</div>
       </section>
     </main>
   );
-}
-
-function StatCard({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
-  return (
-    <div className="border rounded-lg p-4">
-      <div className="text-xs uppercase tracking-wide text-neutral-600">{label}</div>
-      <div className="mt-1 text-2xl font-semibold">{value}</div>
-      {sub ? <div className="text-xs text-neutral-600 mt-0.5">{sub}</div> : null}
-    </div>
-  );
-}
-
-function fmtDuration(sec: number) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  const parts = [];
-  if (h) parts.push(`${h}h`);
-  if (m) parts.push(`${m}m`);
-  parts.push(`${s}s`);
-  return parts.join(' ');
 }
