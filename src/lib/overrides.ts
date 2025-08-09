@@ -63,6 +63,9 @@ export async function grantOverride(ip: string, minutes: number, uses: number) {
   await setRaw(ip, s);
 }
 
+// Back-compat alias for any older imports
+export const grantIp = grantOverride;
+
 export async function releaseOverride(ip: string) {
   await delRaw(ip);
 }
@@ -106,7 +109,13 @@ export async function listOverrides(): Promise<{ ip: string; remaining: number; 
       if (s) await releaseOverride(ip); // prune
     }
   }));
-  // most expiring first
   out.sort((a, b) => a.expiresInMs - b.expiresInMs);
   return out;
+}
+
+// Return current override (shape used by /api/coupon GET)
+export async function getOverride(ip: string): Promise<{ remaining: number; expiresInMs: number } | null> {
+  const s = await getRaw(ip);
+  if (!alive(s)) return null;
+  return { remaining: s.remaining, expiresInMs: s.expiresAt - now() };
 }
