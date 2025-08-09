@@ -225,6 +225,29 @@ export default function AdminManagePage() {
     }
   }
 
+  // NEW: applyDefaultsToCode — creates/updates a specific code with current defaults.
+  async function applyDefaultsToCode(code: string) {
+    if (!code) return;
+    setBusyBtn('apply-chicken');
+    try {
+      const payload: CouponRow = { code, minutes: defaults.defaultMinutes, uses: defaults.defaultUses };
+      const res = await fetch('/api/admin/coupons', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-admin-key': stored },
+        body: JSON.stringify(payload),
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(()=>({}));
+        alert(j?.error || 'Failed to apply defaults');
+      } else {
+        await refreshAll(stored, dailyRange);
+      }
+    } finally {
+      setBusyBtn('');
+    }
+  }
+
   function editCoupon(c: CouponRow) {
     setForm({ code: c.code, minutes: c.minutes, uses: c.uses });
     window.scrollTo({ top: 0, behavior: 'smooth' });
