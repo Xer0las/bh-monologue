@@ -19,9 +19,9 @@ type DefaultSettings = {
 };
 
 const DEFAULTS: DefaultSettings = {
-  // sensible baseline that you can edit from /admin
-  defaultMinutes: 15,
-  defaultUses: 3,
+  // ⬇️ Built‑in defaults (what you want to see on a fresh load)
+  defaultMinutes: 10080, // 7 days
+  defaultUses: 100,
 
   // optional content defaults (safe fallbacks)
   age: "Teens 14–17",
