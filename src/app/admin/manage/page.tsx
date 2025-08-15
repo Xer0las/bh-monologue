@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type OverrideRow = { ip: string; remaining: number; expiresInSeconds: number };
 type CouponRow = { code: string; minutes: number; uses: number };
@@ -51,7 +51,6 @@ export default function AdminManagePage() {
   const [stored, setStored] = useState<string>('');
   const [overrides, setOverrides] = useState<OverrideRow[]>([]);
   const [coupons, setCoupons] = useState<CouponRow[]>([]);
-  const [form, setForm] = useState<CouponRow>({ code: '', minutes: 60, uses: 10 });
   const [err, setErr] = useState<string>('');
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,9 +58,6 @@ export default function AdminManagePage() {
 
   // Saved (authoritative) defaults from the server
   const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
-  // Draft strings so typing doesn’t blur after first char
-  const [draftMins, setDraftMins] = useState<string>('10080');
-  const [draftUses, setDraftUses] = useState<string>('100');
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [daily, setDaily] = useState<DailyResp | null>(null);
@@ -72,7 +68,17 @@ export default function AdminManagePage() {
   const [dailyRange, setDailyRange] = useState<number>(30);
   const [stackMode, setStackMode] = useState<'age'|'genre'>('age');
 
-  // bootstrap key
+  // ---------- Refs for UNCONTROLLED inputs (no blur on re-render) ----------
+  // Global defaults refs
+  const minsRef = useRef<HTMLInputElement>(null);
+  const usesRef = useRef<HTMLInputElement>(null);
+
+  // Coupon form refs
+  const codeRef = useRef<HTMLInputElement>(null);
+  const cMinsRef = useRef<HTMLInputElement>(null);
+  const cUsesRef = useRef<HTMLInputElement>(null);
+
+  // Bootstrap key
   useEffect(() => {
     const k = localStorage.getItem('adminKey') || '';
     setKey(k);
@@ -126,17 +132,15 @@ export default function AdminManagePage() {
         setCoupons(cpj.coupons || []);
         if (dfj?.defaults) {
           setDefaults(dfj.defaults);
-          // keep drafts in sync with saved values
-          setDraftMins(String(dfj.defaults.defaultMinutes ?? ''));
-          setDraftUses(String(dfj.defaults.defaultUses ?? ''));
+          // Sync UNCONTROLLED inputs manually so they display current values
+          if (minsRef.current) minsRef.current.value = String(dfj.defaults.defaultMinutes ?? '');
+          if (usesRef.current) usesRef.current.value = String(dfj.defaults.defaultUses ?? '');
+          // Also prime coupon form with current defaults
+          if (cMinsRef.current && !cMinsRef.current.value) cMinsRef.current.value = String(dfj.defaults.defaultMinutes ?? '');
+          if (cUsesRef.current && !cUsesRef.current.value) cUsesRef.current.value = String(dfj.defaults.defaultUses ?? '');
         }
         if (sttj?.stats) setStats(sttj.stats);
         if (dlj?.points) setDaily(dlj);
-        setForm(f => f.code ? f : {
-          code: '',
-          minutes: dfj?.defaults?.defaultMinutes ?? 60,
-          uses: dfj?.defaults?.defaultUses ?? 10
-        });
       }
     } catch (e: any) {
       setErr(e?.message || 'Network error');
@@ -190,23 +194,47 @@ export default function AdminManagePage() {
     await refreshAll(stored, dailyRange);
   }
 
+  // --------- Coupon form handlers (read from refs on submit) ---------
+  function clearCouponForm() {
+    if (codeRef.current) codeRef.current.value = '';
+    if (cMinsRef.current) cMinsRef.current.value = String(defaults.defaultMinutes);
+    if (cUsesRef.current) cUsesRef.current.value = String(defaults.defaultUses);
+  }
+
   async function createOrUpdateCoupon(e: React.FormEvent) {
     e.preventDefault();
     setBusyBtn('saveCoupon');
+
+    const code = codeRef.current?.value?.trim() || '';
+    const minutes = parseInt(cMinsRef.current?.value || '', 10);
+    const uses = parseInt(cUsesRef.current?.value || '', 10);
+
+    if (!code) { setBusyBtn(''); alert('Please enter a code.'); return; }
+    if (!Number.isFinite(minutes) || minutes < 0) { setBusyBtn(''); alert('Minutes must be a non-negative number.'); return; }
+    if (!Number.isFinite(uses) || uses < 0) { setBusyBtn(''); alert('Uses must be a non-negative number.'); return; }
+
     const res = await fetch('/api/admin/coupons', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-admin-key': stored },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ code, minutes, uses }),
       cache: 'no-store',
     });
+
     setBusyBtn('');
     if (res.ok) {
-      setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses });
+      clearCouponForm();
       await refreshAll(stored, dailyRange);
     } else {
       const j = await res.json().catch(() => ({}));
       setErr(j?.error || 'Failed to save coupon');
     }
+  }
+
+  function editCoupon(c: CouponRow) {
+    if (codeRef.current) codeRef.current.value = c.code;
+    if (cMinsRef.current) cMinsRef.current.value = String(c.minutes);
+    if (cUsesRef.current) cUsesRef.current.value = String(c.uses);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function deleteCoupon(code: string) {
@@ -221,14 +249,13 @@ export default function AdminManagePage() {
     await refreshAll(stored, dailyRange);
   }
 
-  // SAVE DEFAULTS using draft strings (prevents blur while typing)
+  // --------- Save defaults (read from refs; no controlled state => no blur) ---------
   async function saveDefaults(e: React.FormEvent) {
     e.preventDefault();
     setBusyBtn('saveDefaults');
 
-    // Allow empty -> treat as NaN (validation below)
-    const minutes = parseInt(draftMins, 10);
-    const uses = parseInt(draftUses, 10);
+    const minutes = parseInt(minsRef.current?.value || '', 10);
+    const uses = parseInt(usesRef.current?.value || '', 10);
 
     if (!Number.isFinite(minutes) || minutes < 0 || !Number.isFinite(uses) || uses < 0) {
       setBusyBtn('');
@@ -247,20 +274,15 @@ export default function AdminManagePage() {
     setBusyBtn('');
 
     if (res.ok && j?.defaults) {
-      // reflect what the server saved
       setDefaults(j.defaults);
-      setDraftMins(String(j.defaults.defaultMinutes));
-      setDraftUses(String(j.defaults.defaultUses));
-      // also update empty coupon form to match the new defaults
-      setForm(f => f.code ? f : { code: '', minutes: j.defaults.defaultMinutes, uses: j.defaults.defaultUses });
+      // ensure inputs reflect what the server saved
+      if (minsRef.current) minsRef.current.value = String(j.defaults.defaultMinutes);
+      if (usesRef.current) usesRef.current.value = String(j.defaults.defaultUses);
+      // also refresh coupons list etc
+      await refreshAll(stored, dailyRange);
     } else {
       alert(j?.error || 'Failed to save defaults');
     }
-  }
-
-  function editCoupon(c: CouponRow) {
-    setForm({ code: c.code, minutes: c.minutes, uses: c.uses });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function downloadCsv(url: string, filename: string) {
@@ -440,8 +462,8 @@ export default function AdminManagePage() {
             name="defaultMinutes"
             type="text"
             inputMode="numeric"
-            value={draftMins}
-            onChange={(e) => setDraftMins(e.target.value.replace(/[^\d]/g, ''))}
+            ref={minsRef}
+            defaultValue={String(defaults.defaultMinutes)}
             className="h-9 px-3 rounded-lg border w-40"
             autoComplete="off"
           />
@@ -451,13 +473,19 @@ export default function AdminManagePage() {
             name="defaultUses"
             type="text"
             inputMode="numeric"
-            value={draftUses}
-            onChange={(e) => setDraftUses(e.target.value.replace(/[^\d]/g, ''))}
+            ref={usesRef}
+            defaultValue={String(defaults.defaultUses)}
             className="h-9 px-3 rounded-lg border w-36"
             autoComplete="off"
           />
           <Btn kind="primary" id="saveDefaults" type="submit">Save defaults</Btn>
-          <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Use defaults in form</Btn>
+          <Btn onClick={() => {
+            if (codeRef.current) codeRef.current.value = '';
+            if (cMinsRef.current) cMinsRef.current.value = String(defaults.defaultMinutes);
+            if (cUsesRef.current) cUsesRef.current.value = String(defaults.defaultUses);
+          }}>
+            Use defaults in form
+          </Btn>
         </form>
       </Card>
 
@@ -469,9 +497,7 @@ export default function AdminManagePage() {
             id="coupon-code"
             name="code"
             placeholder="code (e.g., chickenpotpie)"
-            value={form.code}
-            onChange={(e) => setForm({ ...form, code: e.target.value })}
-            required
+            ref={codeRef}
             className="h-9 px-3 rounded-lg border w-60"
             autoComplete="off"
           />
@@ -479,28 +505,28 @@ export default function AdminManagePage() {
           <input
             id="coupon-minutes"
             name="minutes"
-            type="number"
-            placeholder="minutes"
-            value={form.minutes}
-            onChange={(e) => setForm({ ...form, minutes: Number(e.target.value) })}
-            required
-            className="h-9 px-3 rounded-lg border w-36"
+            type="text"
             inputMode="numeric"
+            placeholder="minutes"
+            ref={cMinsRef}
+            defaultValue={String(defaults.defaultMinutes)}
+            className="h-9 px-3 rounded-lg border w-36"
+            autoComplete="off"
           />
           <label htmlFor="coupon-uses" className="text-sm">Uses</label>
           <input
             id="coupon-uses"
             name="uses"
-            type="number"
-            placeholder="uses"
-            value={form.uses}
-            onChange={(e) => setForm({ ...form, uses: Number(e.target.value) })}
-            required
-            className="h-9 px-3 rounded-lg border w-32"
+            type="text"
             inputMode="numeric"
+            placeholder="uses"
+            ref={cUsesRef}
+            defaultValue={String(defaults.defaultUses)}
+            className="h-9 px-3 rounded-lg border w-32"
+            autoComplete="off"
           />
-          <Btn kind="primary" id="saveCoupon" type="submit">{form.code ? 'Save Coupon' : 'Create Coupon'}</Btn>
-          {form.code && <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Clear</Btn>}
+          <Btn kind="primary" id="saveCoupon" type="submit">Save Coupon</Btn>
+          <Btn onClick={clearCouponForm}>Clear</Btn>
         </form>
 
         <h3 className="mt-4 font-semibold">Existing Coupons</h3>
