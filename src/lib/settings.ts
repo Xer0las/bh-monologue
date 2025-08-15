@@ -19,7 +19,7 @@ type DefaultSettings = {
 };
 
 const DEFAULTS: DefaultSettings = {
-  // ⬇️ Built‑in defaults (what you want to see on a fresh load)
+  // Built‑in defaults (what you want on a fresh load)
   defaultMinutes: 10080, // 7 days
   defaultUses: 100,
 
@@ -34,21 +34,31 @@ const DEFAULTS: DefaultSettings = {
 
 const KEY = "bh:monologues:global-defaults:v1";
 
-// ---- Upstash Redis helpers (optional) ----
+// ---- Upstash Redis helpers ----
+// API shape (REST v1):
+//  GET:  GET  ${URL}/get/{key}             -> { result: string | null }
+//  SET:  POST ${URL}/set/{key}/{value}     -> { result: "OK" }
+//  Value should be string; we JSON.stringify our object.
+
 async function redisGet<T>(key: string): Promise<T | null> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
 
-  const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!resp.ok) return null;
-  const data = (await resp.json().catch(() => null)) as any;
-  if (!data || typeof data.result === "undefined" || data.result === null) return null;
   try {
-    return JSON.parse(data.result) as T;
+    const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json().catch(() => null)) as any;
+    const raw = data?.result ?? null;
+    if (raw == null) return null;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
   } catch {
     return null;
   }
@@ -58,13 +68,13 @@ async function redisSet<T>(key: string, value: T): Promise<void> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return;
-  await fetch(`${url}/set/${encodeURIComponent(key)}`, {
+
+  const payload = encodeURIComponent(JSON.stringify(value));
+  // Correct REST call: value in the path, not JSON body
+  await fetch(`${url}/set/${encodeURIComponent(key)}/${payload}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ value: JSON.stringify(value) }),
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
   }).catch(() => {});
 }
 
