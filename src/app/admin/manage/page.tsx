@@ -59,7 +59,7 @@ export default function AdminManagePage() {
 
   // Saved (authoritative) defaults from the server
   const [defaults, setDefaults] = useState<Defaults>({ defaultMinutes: 10080, defaultUses: 100 });
-  // NEW: draft strings to prevent field blurring while typing
+  // Draft strings so typing doesn’t blur after first char
   const [draftMins, setDraftMins] = useState<string>('10080');
   const [draftUses, setDraftUses] = useState<string>('100');
 
@@ -221,15 +221,15 @@ export default function AdminManagePage() {
     await refreshAll(stored, dailyRange);
   }
 
-  // SAVE DEFAULTS:
-  // - Use the *draft* strings so typing doesn't blur.
-  // - Parse to integers right before sending to the API.
+  // SAVE DEFAULTS using draft strings (prevents blur while typing)
   async function saveDefaults(e: React.FormEvent) {
     e.preventDefault();
     setBusyBtn('saveDefaults');
 
+    // Allow empty -> treat as NaN (validation below)
     const minutes = parseInt(draftMins, 10);
     const uses = parseInt(draftUses, 10);
+
     if (!Number.isFinite(minutes) || minutes < 0 || !Number.isFinite(uses) || uses < 0) {
       setBusyBtn('');
       alert('Please enter valid non-negative numbers for minutes and uses.');
@@ -251,7 +251,7 @@ export default function AdminManagePage() {
       setDefaults(j.defaults);
       setDraftMins(String(j.defaults.defaultMinutes));
       setDraftUses(String(j.defaults.defaultUses));
-      // optionally refresh other sections that rely on defaults
+      // also update empty coupon form to match the new defaults
       setForm(f => f.code ? f : { code: '', minutes: j.defaults.defaultMinutes, uses: j.defaults.defaultUses });
     } else {
       alert(j?.error || 'Failed to save defaults');
@@ -328,11 +328,9 @@ export default function AdminManagePage() {
     return (
       <div className="flex items-end gap-1 h-40">
         {points.map(p => {
-          // base bar height (proportional to day's total)
           const barPct = (p.total / max) * 100;
           const barStyles = { height: `${barPct}%` };
 
-          // compute segments by key
           const segs = keys.map(k => {
             const scope = stackMode === 'age' ? p.byAge : p.byGenre;
             const value = scope?.[k] || 0;
@@ -343,16 +341,19 @@ export default function AdminManagePage() {
           return (
             <div key={p.date} className="flex-1 flex items-end">
               <div className="w-full rounded-t overflow-hidden" style={barStyles} title={`${p.date}: ${p.total}`}>
-                {/* segment stack (top-to-bottom) */}
-                <div className="w-full h-full flex flex-col-reverse">
-                  {segs.map(s => (
-                    <div
-                      key={s.key}
-                      className={`${colors[s.key] || 'bg-neutral-400'}`}
-                      style={{ height: `${s.pct}%` }}
-                      title={`${p.date} • ${s.key}: ${s.value}`}
-                    />
-                  ))}
+                {/* Base bar so totals are visible even if segments are 0 */}
+                <div className="w-full h-full bg-neutral-200">
+                  {/* segment stack (top-to-bottom) */}
+                  <div className="w-full h-full flex flex-col-reverse">
+                    {segs.map(s => (
+                      <div
+                        key={s.key}
+                        className={`${colors[s.key] || 'bg-neutral-400'}`}
+                        style={{ height: `${s.pct}%` }}
+                        title={`${p.date} • ${s.key}: ${s.value}`}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -437,25 +438,26 @@ export default function AdminManagePage() {
           <input
             id="default-mins"
             name="defaultMinutes"
-            type="number"
-            value={draftMins}
-            onChange={(e) => setDraftMins(e.target.value)}
-            className="h-9 px-3 rounded-lg border w-40"
+            type="text"
             inputMode="numeric"
+            value={draftMins}
+            onChange={(e) => setDraftMins(e.target.value.replace(/[^\d]/g, ''))}
+            className="h-9 px-3 rounded-lg border w-40"
+            autoComplete="off"
           />
           <label htmlFor="default-uses" className="text-sm">Default uses</label>
           <input
             id="default-uses"
             name="defaultUses"
-            type="number"
-            value={draftUses}
-            onChange={(e) => setDraftUses(e.target.value)}
-            className="h-9 px-3 rounded-lg border w-36"
+            type="text"
             inputMode="numeric"
+            value={draftUses}
+            onChange={(e) => setDraftUses(e.target.value.replace(/[^\d]/g, ''))}
+            className="h-9 px-3 rounded-lg border w-36"
+            autoComplete="off"
           />
           <Btn kind="primary" id="saveDefaults" type="submit">Save defaults</Btn>
           <Btn onClick={() => setForm({ code: '', minutes: defaults.defaultMinutes, uses: defaults.defaultUses })}>Use defaults in form</Btn>
-          {/* Removed: Apply defaults to “chickenpotpie” */}
         </form>
       </Card>
 
